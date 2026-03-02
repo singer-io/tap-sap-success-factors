@@ -1,0 +1,11 @@
+{
+    "client_id": "your_client_id",
+    "user_id": "your_user_id",
+    "oauth_endpoint": "oauth_endpoint_url",
+    "company_id": "your_company_id",
+    "api_endpoint": "api_endpoint_url",
+    "grant_type": "grant_type",
+    "start_date": "2024-01-01T00:00:00Z",
+    "lookback_window_days": 1,
+    "assertion": "saml_assertion"
+}
