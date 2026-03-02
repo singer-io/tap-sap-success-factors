@@ -32,7 +32,13 @@ def _get_retry_after(exc) -> int:
             "Rate limited by SAP SuccessFactors. Retrying in %s seconds (Retry-After header).",
             retry_after,
         )
-        return int(retry_after)
+        try:
+            return int(retry_after)
+        except ValueError:
+            LOGGER.warning(
+                "Could not parse Retry-After header value '%s', using 60 seconds.", retry_after
+            )
+            return 60
     LOGGER.warning(
         "Rate limited by SAP SuccessFactors. No Retry-After header present. Retrying in 60 seconds."
     )
@@ -179,4 +185,9 @@ class SuccessFactorsClient:
         with metrics.http_request_timer(endpoint):
             response = self._session.request(method, endpoint, **kwargs)
         raise_for_error(response)
-        return response.json() if parse_json else response
+        if not parse_json:
+            return response
+        # 204 No Content or empty body — nothing to decode
+        if response.status_code == 204 or not response.content or not response.content.strip():
+            return None
+        return response.json()

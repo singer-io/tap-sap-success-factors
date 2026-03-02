@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 
 import singer
 from singer import metadata
@@ -9,10 +9,10 @@ from tap_sap_success_factors.streams.dynamic import DynamicStream
 LOGGER = singer.get_logger()
 
 
-def update_currently_syncing(state: Dict, stream_name: str) -> None:
+def update_currently_syncing(state: Dict, stream_name: Optional[str]) -> None:
     """Update `currently_syncing` marker in state."""
-    if not stream_name and singer.get_currently_syncing(state):
-        del state["currently_syncing"]
+    if not stream_name:
+        state.pop("currently_syncing", None)
     else:
         singer.set_currently_syncing(state, stream_name)
     singer.write_state(state)
@@ -22,13 +22,15 @@ def sync(client, config: Dict, catalog: singer.Catalog, state: Dict) -> None:
     """Sync selected streams from catalog."""
     del config
 
-    streams_to_sync = [stream.stream for stream in catalog.get_selected_streams(state)]
+    streams_to_sync = [
+        stream.tap_stream_id for stream in catalog.get_selected_streams(state)
+    ]
     child_map = {}
     for stream in catalog.streams:
         root_mdata = metadata.to_map(stream.metadata).get((), {})
-        parent_stream = root_mdata.get("parent-tap-stream-id")
+        parent_stream = root_mdata.get("parent-tap-stream-id") or root_mdata.get("parent-stream")
         if parent_stream:
-            child_map.setdefault(parent_stream, []).append(stream.stream)
+            child_map.setdefault(parent_stream, []).append(stream.tap_stream_id)
 
     LOGGER.info("selected_streams: %s", streams_to_sync)
 
@@ -47,7 +49,7 @@ def sync(client, config: Dict, catalog: singer.Catalog, state: Dict) -> None:
                 continue
 
             try:
-                write_schema(stream, client, streams_to_sync, catalog)
+                write_schema(stream, client, streams_to_sync, catalog, child_map=child_map)
                 LOGGER.info("START Syncing: %s", stream_name)
                 update_currently_syncing(state, stream_name)
                 total_records = stream.sync(state=state, transformer=transformer)
@@ -64,4 +66,4 @@ def sync(client, config: Dict, catalog: singer.Catalog, state: Dict) -> None:
                 LOGGER.warning("FAILED Syncing: %s, error: %s", stream_name, err)
 
     if failed_streams:
-        LOGGER.warning("Streams failed due permissions/availability: %s", failed_streams)
+        LOGGER.warning("Streams failed due to permissions/availability: %s", failed_streams)
