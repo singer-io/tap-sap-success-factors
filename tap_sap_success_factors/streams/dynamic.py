@@ -29,4 +29,18 @@ class DynamicStream(BaseStream):
         )
         self.parent_filter_field = root_metadata.get("parent-filter-field") or ""
         self.parent_key_field = root_metadata.get("parent-key-field") or ""
+        # Optional secondary filter for multi-field parent expressions.
+        self.parent_secondary_filter_field = (
+            root_metadata.get("parent-secondary-filter-field") or ""
+        )
+        self.parent_secondary_key_field = (
+            root_metadata.get("parent-secondary-key-field") or ""
+        )
+        # OData $expand support: fetch via navigation from a parent entity set.
+        self.expand_nav_property = root_metadata.get("expand-nav-property") or ""
+        self.expand_parent_entity_set = root_metadata.get("expand-parent-entity-set") or ""
+        if self.expand_nav_property and self.expand_parent_entity_set:
+            # Override path to point at the parent entity set (not this stream's
+            # own entity set) so that _get_records_via_expand queries correctly.
+            self.path = f"{client.odata_path}/{self.expand_parent_entity_set}"
         self.children = child_map.get(self.tap_stream_id, [])

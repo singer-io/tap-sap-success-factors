@@ -77,7 +77,7 @@ def raise_for_error(response: requests.Response) -> None:
     )
 
 
-class SuccessFactorsClient:
+class SAPSuccessFactorsClient:
     """HTTP client wrapper for SAP SuccessFactors APIs."""
 
     def __init__(self, config: Mapping[str, Any]) -> None:

@@ -26,9 +26,26 @@ class BaseStream(ABC):
     date_fields = []
     parent_filter_field = ""
     parent_key_field = "personIdExternal"
+    # Optional secondary filter for multi-field parent filter expressions.
+    parent_secondary_filter_field = ""
+    parent_secondary_key_field = ""
+    # OData $expand support: fetch this stream by expanding a nav property on
+    # expand_parent_entity_set instead of querying the entity set directly.
+    expand_nav_property = ""
+    expand_parent_entity_set = ""
     path = ""
 
     def __init__(self, client=None, catalog=None) -> None:
+        if catalog is None:
+            raise ValueError(
+                "catalog entry must not be None — ensure the stream exists in the catalog "
+                "before constructing a stream instance."
+            )
+        if catalog.schema is None:
+            raise ValueError(
+                f"catalog entry '{catalog.tap_stream_id}' has no schema — the catalog may be "
+                "malformed or the stream was not discovered correctly."
+            )
         self.client = client
         self.catalog = catalog
         self.schema = catalog.schema.to_dict()
@@ -62,6 +79,13 @@ class BaseStream(ABC):
         if parent_obj and self.parent_filter_field:
             parent_val = parent_obj[self.parent_key_field]
             clause = f"{self.parent_filter_field} eq '{parent_val}'"
+            # Append optional secondary filter field (e.g. activityObjectType).
+            if self.parent_secondary_filter_field and self.parent_secondary_key_field:
+                sec_val = parent_obj.get(self.parent_secondary_key_field, "")
+                if sec_val is not None and sec_val != "":
+                    clause += (
+                        f" and {self.parent_secondary_filter_field} eq '{sec_val}'"
+                    )
             params["$filter"] = (
                 f"{params['$filter']} and {clause}" if "$filter" in params else clause
             )
@@ -167,12 +191,56 @@ class BaseStream(ABC):
 
     def get_records(self, state: Dict, parent_obj: Dict = None):
         """Iterate records with OData next-link pagination."""
+        if self.expand_nav_property:
+            yield from self._get_records_via_expand(state, parent_obj)
+            return
+
         path = self.path or f"{self.client.odata_path}/{self.entity}"
         params = self.build_params(state, parent_obj)
         payload = self.client.get(path, params=params)
 
         while True:
             yield from self.parse_odata_records(payload)
+
+            next_link = self.get_next_link(payload)
+            if not next_link:
+                break
+
+            response = self.client.request_raw(
+                "GET",
+                next_link,
+                headers={"Authorization": f"Bearer {self.client.get_access_token()}"},
+            )
+            payload = response.json()
+
+    def _get_records_via_expand(self, state: Dict, parent_obj: Dict = None):
+        """Fetch records via OData $expand from a parent entity set.
+
+        Queries ``expand_parent_entity_set`` with ``$expand=<nav_property>``
+        and extracts the nested records from the navigation property of every
+        parent record.  Handles both 1-to-many (results list) and 1-to-1
+        (single object) navigation properties.
+        """
+        path = self.path  # already set to parent entity set path in __init__
+        params = self.build_params(state, parent_obj)
+        params["$expand"] = self.expand_nav_property
+        payload = self.client.get(path, params=params)
+
+        while True:
+            for parent_record in self.parse_odata_records(payload):
+                nav_data = parent_record.get(self.expand_nav_property)
+                if not nav_data or not isinstance(nav_data, dict):
+                    continue
+                # Skip OData deferred links (navigation not yet expanded).
+                if "__deferred" in nav_data:
+                    continue
+                results = nav_data.get("results")
+                if results is not None:
+                    # 1-to-many: {"results": [...]}
+                    yield from results
+                else:
+                    # 1-to-1: nav_data is the record itself.
+                    yield nav_data
 
             next_link = self.get_next_link(payload)
             if not next_link:
@@ -236,19 +304,11 @@ class BaseStream(ABC):
                     counter.increment()
 
                 for child in self.child_to_sync:
-                    try:
-                        child.sync(
-                            state=state,
-                            transformer=transformer,
-                            parent_obj=record,
-                        )
-                    except Exception as child_err:  # pragma: no cover
-                        LOGGER.warning(
-                            "FAILED child sync %s (parent=%s): %s",
-                            child.tap_stream_id,
-                            self.tap_stream_id,
-                            child_err,
-                        )
+                    child.sync(
+                        state=state,
+                        transformer=transformer,
+                        parent_obj=record,
+                    )
 
             if bookmark_key and current_max_bookmark:
                 self.write_bookmark(state, self.tap_stream_id, value=current_max_bookmark)

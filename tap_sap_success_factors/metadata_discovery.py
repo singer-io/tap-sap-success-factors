@@ -7,6 +7,68 @@ from singer import metadata
 
 LOGGER = singer.get_logger()
 
+# SAP OData annotation namespace for filterable / sortable attributes
+SAP_DATA_NS = "{http://www.sap.com/Protocols/SAPData}"
+
+# ---------------------------------------------------------------------------
+# Group 4: Known parent-child relationships that EDMX inference misses.
+# Keyed by snake_case stream name.
+# ---------------------------------------------------------------------------
+KNOWN_PARENT_OVERRIDES: Dict[str, Dict] = {
+    # WorkflowAllowedActionList requires wfRequestId filter in every request.
+    "workflow_allowed_action_list": {
+        "parent-tap-stream-id": "wf_request",
+        "parent-filter-field": "wfRequestId",
+        "parent-key-field": "wfRequestId",
+    },
+    # GoalPlanState has userId as a filterable key; fetch per-user.
+    "goal_plan_state": {
+        "parent-tap-stream-id": "user",
+        "parent-filter-field": "userId",
+        "parent-key-field": "userId",
+    },
+    # ONB2ActivityNudgeDetails requires BOTH activityId AND activityObjectType.
+    "onb2_activity_nudge_details": {
+        "parent-tap-stream-id": "onb2_activity",
+        "parent-filter-field": "activityId",
+        "parent-key-field": "activityId",
+        "parent-secondary-filter-field": "activityObjectType",
+        "parent-secondary-key-field": "activityObjectType",
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Group 5: Streams only accessible via OData $expand from a parent entity.
+# Keyed by snake_case stream name.  The expand-parent-entity-set is the SAP
+# entity set name (not a catalog stream name).
+# ---------------------------------------------------------------------------
+KNOWN_EXPAND_OVERRIDES: Dict[str, Dict] = {
+    "emp_compensation_calculated": {
+        "expand-nav-property": "empCompensationCalculatedNav",
+        "expand-parent-entity-set": "EmpCompensation",
+    },
+    "emp_compensation_group_sum_calculated": {
+        "expand-nav-property": "empCompensationGroupSumCalculatedNav",
+        "expand-parent-entity-set": "EmpCompensation",
+    },
+    # SuccessStoreContentBlob is linked 1-to-1 from SuccessStoreContent via
+    # the "contentData" navigation property (confirmed from entity service log).
+    "success_store_content_blob": {
+        "expand-nav-property": "contentData",
+        "expand-parent-entity-set": "SuccessStoreContent",
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Group 3 (runtime override): Streams whose lastModified* field is marked
+# sap:filterable="true" in EDMX but rejected at runtime by the API with
+# COE_BAD_PROPERTY_EXPRESSION.  Force FULL_TABLE so no $filter is added.
+# ---------------------------------------------------------------------------
+FORCED_FULL_TABLE_STREAMS = {
+    "theme_info",
+    "user_permissions",
+}
+
 EDM_TO_JSON_TYPE = {
     "Edm.String": ["null", "string"],
     "Edm.Guid": ["null", "string"],
@@ -272,12 +334,19 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                         key_names.append(ref_name)
 
             properties = {}
+            filterable_props: set = set()
             navigations = []
             for prop in _find_children(entity_type, "Property"):
                 prop_name = prop.attrib.get("Name")
                 prop_type = prop.attrib.get("Type", "Edm.String")
                 if not prop_name:
                     continue
+
+                # Track OData-filterable properties via SAP annotation.
+                # Default is filterable=true when the attribute is absent.
+                sap_filterable = prop.attrib.get(f"{SAP_DATA_NS}filterable", "true")
+                if sap_filterable.lower() != "false":
+                    filterable_props.add(prop_name)
 
                 json_prop = {"type": EDM_TO_JSON_TYPE.get(prop_type, ["null", "string"])}
                 if prop_type in DATE_TIME_TYPES:
@@ -299,6 +368,7 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
             entity_types[fq_name] = {
                 "keys": key_names,
                 "properties": properties,
+                "filterable_props": filterable_props,
             }
             entity_navigations[fq_name] = navigations
 
@@ -320,6 +390,9 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
         to_snake_case(set_name): entity_type
         for set_name, entity_type in entity_sets.items()
     }
+    # Pre-compute the full set of snake_case stream names that will be
+    # discoverable from this EDMX.  Used to validate parent overrides below.
+    discovered_stream_names = {to_snake_case(s) for s in entity_sets}
 
     for set_name, entity_type in entity_sets.items():
         entity_data = entity_types.get(entity_type)
@@ -334,10 +407,23 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
         key_properties = entity_data["keys"]
 
         replication_keys = []
+        # Only use a replication key candidate if it exists in the schema AND
+        # is OData-filterable.  When EDMX has no SAP filterable annotations the
+        # filterable_props set defaults to all properties (fully permissive).
+        entity_filterable = entity_data.get("filterable_props", set(properties.keys()))
         for candidate in ["lastModifiedDateTime", "lastModifiedOn", "lastModifiedDate"]:
-            if candidate in properties:
+            if candidate in properties and candidate in entity_filterable:
                 replication_keys = [candidate]
                 break
+
+        # Runtime override: EDMX annotation is misleading for these streams.
+        # The API rejects the lastModified* field as non-filterable at runtime.
+        if stream_name in FORCED_FULL_TABLE_STREAMS:
+            replication_keys = []
+            LOGGER.info(
+                "Forced FULL_TABLE for %s (EDMX filterable annotation is inaccurate at runtime)",
+                stream_name,
+            )
 
         replication_method = "INCREMENTAL" if replication_keys else "FULL_TABLE"
 
@@ -374,7 +460,66 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
             if parent_stream:
                 break
 
+        # ------------------------------------------------------------------
+        # Group 4: Apply hardcoded parent overrides when EDMX inference could
+        # not detect the relationship (e.g. no navigation property on child).
+        # Guard: only apply the override when the declared parent is actually
+        # present in the EDMX for this instance — otherwise the child stream
+        # would be permanently orphaned and silently never sync.
+        # ------------------------------------------------------------------
+        parent_secondary_filter_field = None
+        parent_secondary_key_field = None
+        if not parent_stream and stream_name in KNOWN_PARENT_OVERRIDES:
+            override = KNOWN_PARENT_OVERRIDES[stream_name]
+            declared_parent = override["parent-tap-stream-id"]
+            if declared_parent not in discovered_stream_names:
+                LOGGER.warning(
+                    "Skipping parent override for %s: declared parent '%s' was not "
+                    "discovered in this EDMX instance. Stream will be attempted as "
+                    "FULL_TABLE direct query.",
+                    stream_name,
+                    declared_parent,
+                )
+            else:
+                parent_stream = declared_parent
+                parent_filter_field = override["parent-filter-field"]
+                parent_key_field = override["parent-key-field"]
+                parent_secondary_filter_field = override.get("parent-secondary-filter-field")
+                parent_secondary_key_field = override.get("parent-secondary-key-field")
+                relationship_name = None
+                relationship_inference = "manual_override"
+                LOGGER.info(
+                    "Applied parent override for %s -> parent=%s",
+                    stream_name,
+                    parent_stream,
+                )
+
         parent_id_field = None
+        if parent_stream and parent_key_field:
+            # ------------------------------------------------------------------
+            # Final validation: ensure the resolved parent (whether inferred
+            # from EDMX associations or from KNOWN_PARENT_OVERRIDES) actually
+            # exists as a discoverable entity set in this EDMX instance.
+            # Without this, a child stream would reference a phantom parent,
+            # causing it to be silently orphaned and never synced.
+            # ------------------------------------------------------------------
+            if parent_stream not in discovered_stream_names:
+                LOGGER.warning(
+                    "Dropping parent '%s' for stream '%s': parent is not discoverable "
+                    "in this EDMX instance (inferred via %s). "
+                    "Stream will be synced as FULL_TABLE direct query.",
+                    parent_stream,
+                    stream_name,
+                    relationship_inference or "unknown",
+                )
+                parent_stream = None
+                parent_filter_field = None
+                parent_key_field = None
+                parent_secondary_filter_field = None
+                parent_secondary_key_field = None
+                relationship_name = None
+                relationship_inference = None
+
         if parent_stream and parent_key_field:
             parent_entity_type = stream_to_entity_type.get(parent_stream)
             parent_properties = entity_types.get(parent_entity_type, {}).get(
@@ -414,6 +559,36 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
             )
             mdata = metadata.write(mdata, (), "parent-filter-field", parent_filter_field)
             mdata = metadata.write(mdata, (), "parent-key-field", parent_key_field)
+            if parent_secondary_filter_field:
+                mdata = metadata.write(
+                    mdata, (), "parent-secondary-filter-field", parent_secondary_filter_field
+                )
+            if parent_secondary_key_field:
+                mdata = metadata.write(
+                    mdata, (), "parent-secondary-key-field", parent_secondary_key_field
+                )
+
+        # ------------------------------------------------------------------
+        # Group 5: Write $expand metadata for streams that can only be
+        # fetched via OData navigation from a parent entity set.
+        # ------------------------------------------------------------------
+        if stream_name in KNOWN_EXPAND_OVERRIDES:
+            expand_info = KNOWN_EXPAND_OVERRIDES[stream_name]
+            mdata = metadata.write(
+                mdata, (), "expand-nav-property", expand_info["expand-nav-property"]
+            )
+            mdata = metadata.write(
+                mdata,
+                (),
+                "expand-parent-entity-set",
+                expand_info["expand-parent-entity-set"],
+            )
+            LOGGER.info(
+                "Configured $expand for %s via %s.%s",
+                stream_name,
+                expand_info["expand-parent-entity-set"],
+                expand_info["expand-nav-property"],
+            )
 
         automatic_fields = list(key_properties + replication_keys)
         if parent_filter_field:
