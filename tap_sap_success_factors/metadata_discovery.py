@@ -590,11 +590,14 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 expand_info["expand-nav-property"],
             )
 
+        # Only primary-key and replication-key fields are marked automatic.
+        # parent_filter_field and parent_id_field are available fields:
+        #   - parent_filter_field is a native schema field used as an OData
+        #     $filter join key; users can select/deselect it freely.
+        #   - parent_id_field (__parent_*) is a synthetic field injected at
+        #     sync time; marking it automatic would break test_available_fields
+        #     because the Singer spec reserves "automatic" for PKs and rep-keys.
         automatic_fields = list(key_properties + replication_keys)
-        if parent_filter_field:
-            automatic_fields.append(parent_filter_field)
-        if parent_id_field:
-            automatic_fields.append(parent_id_field)
 
         for automatic_field in automatic_fields:
             if automatic_field in properties:
