@@ -18,7 +18,7 @@ def build_basic_auth_header(config: Dict) -> Optional[str]:
     password = config.get("password")
     if username and password:
         token = base64.b64encode(f"{username}:{password}".encode()).decode()
-        LOGGER.info("Using HTTP Basic authentication for user '%s'", username)
+        LOGGER.info("Using HTTP Basic authentication mechanism with provided username and password.")
         return f"Basic {token}"
     return None
 
