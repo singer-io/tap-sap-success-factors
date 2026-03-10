@@ -1,3 +1,4 @@
+import unittest
 from unittest.mock import Mock
 
 from tap_sap_success_factors.schema import write_schema
@@ -22,9 +23,10 @@ class FakeCatalog:
         return Mock(schema=_Schema(), metadata=[{"breadcrumb": [], "metadata": {"selected": True}}])
 
 
-def test_write_schema_writes_only_selected_stream():
-    stream = Mock()
-    stream.is_selected.return_value = True
-    write_schema(stream, Mock(), ["per_email"], FakeCatalog())
+class TestWriteSchema(unittest.TestCase):
 
-    stream.write_schema.assert_called_once()
+    def test_writes_only_selected_stream(self):
+        stream = Mock()
+        stream.is_selected.return_value = True
+        write_schema(stream, Mock(), ["per_email"], FakeCatalog())
+        stream.write_schema.assert_called_once()

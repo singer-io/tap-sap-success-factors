@@ -1,3 +1,4 @@
+import unittest
 from unittest.mock import Mock
 
 from tap_sap_success_factors.discover import discover
@@ -28,9 +29,9 @@ METADATA_XML = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-def _client():
+def _client(metadata_xml=None):
     response = Mock()
-    response.text = METADATA_XML
+    response.text = metadata_xml if metadata_xml is not None else METADATA_XML
 
     client = Mock()
     client.base_url = "https://example.successfactors.com"
@@ -40,23 +41,24 @@ def _client():
     return client
 
 
-def test_dynamic_discovery_builds_schemas_and_metadata():
-    schemas, field_metadata, stream_defs = discover_dynamic_streams(_client())
-    assert "calibration_template" in schemas
-    assert "calibration_template" in field_metadata
-    assert stream_defs["calibration_template"]["replication_method"] == "INCREMENTAL"
-    assert schemas["calibration_template"]["type"] == "object"
+class TestDynamicDiscovery(unittest.TestCase):
+
+    def test_builds_schemas_and_metadata(self):
+        schemas, field_metadata, stream_defs = discover_dynamic_streams(_client())
+        self.assertIn("calibration_template", schemas)
+        self.assertIn("calibration_template", field_metadata)
+        self.assertEqual(stream_defs["calibration_template"]["replication_method"], "INCREMENTAL")
+        self.assertEqual(schemas["calibration_template"]["type"], "object")
+
+    def test_discover_returns_catalog_entries(self):
+        catalog = discover(_client())
+        stream_names = {stream.stream for stream in catalog.streams}
+        self.assertIn("calibration_template", stream_names)
 
 
-def test_discover_returns_catalog_entries():
-    client = _client()
-    catalog = discover(client)
-    stream_names = {stream.stream for stream in catalog.streams}
-    assert "calibration_template" in stream_names
+class TestAssociationInference(unittest.TestCase):
 
-
-def test_association_without_referential_constraint_infers_relationship():
-    metadata_xml = """<?xml version="1.0" encoding="utf-8"?>
+    ASSOCIATION_XML = """<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
     <edmx:DataServices>
         <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm" Namespace="SFOData">
@@ -99,24 +101,16 @@ def test_association_without_referential_constraint_infers_relationship():
 </edmx:Edmx>
 """
 
-    response = Mock()
-    response.text = metadata_xml
-
-    client = Mock()
-    client.base_url = "https://example.successfactors.com"
-    client.odata_path = "/odata/v2"
-    client.get_access_token.return_value = "token"
-    client.request_raw.return_value = response
-
-    _schemas, _metadata, stream_defs = discover_dynamic_streams(client)
-    wf_request = stream_defs["wf_request"]
-
-    assert wf_request["parent_stream"] == "employee_profile_sub_section_config"
-    assert wf_request["relationship_inference"] == "multiplicity_heuristic"
+    def test_without_referential_constraint_infers_relationship(self):
+        _schemas, _metadata, stream_defs = discover_dynamic_streams(_client(self.ASSOCIATION_XML))
+        wf_request = stream_defs["wf_request"]
+        self.assertEqual(wf_request["parent_stream"], "employee_profile_sub_section_config")
+        self.assertEqual(wf_request["relationship_inference"], "multiplicity_heuristic")
 
 
-def test_child_schema_contains_parent_identifier_fields():
-    metadata_xml = """<?xml version="1.0" encoding="utf-8"?>
+class TestChildSchemaParentFields(unittest.TestCase):
+
+    CHILD_PARENT_XML = """<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
     <edmx:DataServices>
         <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm" Namespace="SFOData">
@@ -153,19 +147,10 @@ def test_child_schema_contains_parent_identifier_fields():
 </edmx:Edmx>
 """
 
-    response = Mock()
-    response.text = metadata_xml
-
-    client = Mock()
-    client.base_url = "https://example.successfactors.com"
-    client.odata_path = "/odata/v2"
-    client.get_access_token.return_value = "token"
-    client.request_raw.return_value = response
-
-    schemas, _metadata, stream_defs = discover_dynamic_streams(client)
-
-    child = schemas["child_entity"]["properties"]
-    assert stream_defs["child_entity"]["parent_stream"] == "parent_entity"
-    assert stream_defs["child_entity"]["parent_filter_field"] == "ParentEntityNavId"
-    assert "ParentEntityNavId" in child
-    assert "__parent_parent_entity_parentId" in child
+    def test_child_schema_contains_parent_identifier_fields(self):
+        schemas, _metadata, stream_defs = discover_dynamic_streams(_client(self.CHILD_PARENT_XML))
+        child = schemas["child_entity"]["properties"]
+        self.assertEqual(stream_defs["child_entity"]["parent_stream"], "parent_entity")
+        self.assertEqual(stream_defs["child_entity"]["parent_filter_field"], "ParentEntityNavId")
+        self.assertIn("ParentEntityNavId", child)
+        self.assertIn("__parent_parent_entity_parentId", child)

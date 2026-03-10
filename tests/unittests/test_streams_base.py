@@ -1,3 +1,4 @@
+import unittest
 from unittest.mock import Mock
 
 from tap_sap_success_factors.streams.dynamic import DynamicStream
@@ -33,28 +34,6 @@ class FakeCatalog:
     ]
 
 
-def test_base_stream_build_params_incremental():
-    client = Mock()
-    client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}
-
-    stream = DynamicStream(client=client, catalog=FakeCatalog())
-    params = stream.build_params(state={})
-
-    assert "$filter" in params
-    assert "lastModifiedDateTime" in params["$filter"]
-
-
-def test_parse_odata_records_and_next_link():
-    stream = DynamicStream(
-        client=Mock(config={"start_date": "2024-01-01T00:00:00Z"}),
-        catalog=FakeCatalog(),
-    )
-
-    payload = {"d": {"results": [{"personIdExternal": "1"}], "__next": "https://next"}}
-    assert list(stream.parse_odata_records(payload))[0]["personIdExternal"] == "1"
-    assert stream.get_next_link(payload) == "https://next"
-
-
 class ChildCatalog:
     class _Schema:
         @staticmethod
@@ -85,16 +64,38 @@ class ChildCatalog:
     ]
 
 
-def test_modify_object_adds_parent_primary_key_to_child_record():
-    stream = DynamicStream(
-        client=Mock(config={"start_date": "2024-01-01T00:00:00Z"}),
-        catalog=ChildCatalog(),
-    )
+class TestBaseStreamBuildParams(unittest.TestCase):
 
-    record = {"permission": "READ"}
-    parent_record = {"userId": "U-100"}
+    def test_incremental_filter_added(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        params = stream.build_params(state={})
+        self.assertIn("$filter", params)
+        self.assertIn("lastModifiedDateTime", params["$filter"])
 
-    updated = stream.modify_object(record, parent_record)
 
-    assert updated["userId"] == "U-100"
-    assert updated["__parent_user_userId"] == "U-100"
+class TestParseOdataRecords(unittest.TestCase):
+
+    def test_returns_records_and_next_link(self):
+        stream = DynamicStream(
+            client=Mock(config={"start_date": "2024-01-01T00:00:00Z"}),
+            catalog=FakeCatalog(),
+        )
+        payload = {"d": {"results": [{"personIdExternal": "1"}], "__next": "https://next"}}
+        self.assertEqual(list(stream.parse_odata_records(payload))[0]["personIdExternal"], "1")
+        self.assertEqual(stream.get_next_link(payload), "https://next")
+
+
+class TestModifyObject(unittest.TestCase):
+
+    def test_adds_parent_primary_key_to_child_record(self):
+        stream = DynamicStream(
+            client=Mock(config={"start_date": "2024-01-01T00:00:00Z"}),
+            catalog=ChildCatalog(),
+        )
+        record = {"permission": "READ"}
+        parent_record = {"userId": "U-100"}
+        updated = stream.modify_object(record, parent_record)
+        self.assertEqual(updated["userId"], "U-100")
+        self.assertEqual(updated["__parent_user_userId"], "U-100")
