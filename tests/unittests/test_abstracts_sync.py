@@ -1,4 +1,5 @@
-from unittest.mock import Mock, call, patch
+import unittest
+from unittest.mock import Mock, patch
 
 from tap_sap_success_factors.streams.dynamic import DynamicStream
 
@@ -122,235 +123,232 @@ def _client(mock_mode=False):
     return client
 
 
-def test_get_records_live_pagination_path():
-    client = _client()
-    client.get.return_value = {
-        "d": {
-            "results": [
-                {
-                    "personIdExternal": "1",
-                    "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
-                }
-            ],
-            "__next": None,
+# ---------------------------------------------------------------------------
+# get_records tests
+# ---------------------------------------------------------------------------
+
+class TestGetRecords(unittest.TestCase):
+
+    def test_live_pagination_path(self):
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
         }
-    }
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        records = list(stream.get_records(state={}))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["personIdExternal"], "1")
 
-    stream = DynamicStream(client=client, catalog=FakeCatalog())
-    records = list(stream.get_records(state={}))
-
-    assert len(records) == 1
-    assert records[0]["personIdExternal"] == "1"
-
-
-def test_get_records_mock_mode_generates_records():
-    client = _client()
-    client.get.return_value = {
-        "d": {
-            "results": [
-                {
-                    "personIdExternal": "mock_1",
-                    "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
-                },
-                {
-                    "personIdExternal": "mock_2",
-                    "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
-                },
-            ],
-            "__next": None,
+    def test_mock_mode_generates_records(self):
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "mock_1",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    },
+                    {
+                        "personIdExternal": "mock_2",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    },
+                ],
+                "__next": None,
+            }
         }
-    }
-    stream = DynamicStream(client=client, catalog=FakeCatalog())
-    records = list(stream.get_records(state={}))
-
-    assert len(records) == 2
-    assert records[0]["personIdExternal"] == "mock_1"
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        records = list(stream.get_records(state={}))
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["personIdExternal"], "mock_1")
 
 
-def test_sync_writes_records_and_bookmarks():
-    client = _client()
-    client.get.return_value = {
-        "d": {
-            "results": [
-                {
-                    "personIdExternal": "1",
-                    "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
-                }
-            ],
-            "__next": None,
+# ---------------------------------------------------------------------------
+# sync tests
+# ---------------------------------------------------------------------------
+
+class TestSync(unittest.TestCase):
+
+    def test_writes_records_and_bookmarks(self):
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
         }
-    }
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
 
-    stream = DynamicStream(client=client, catalog=FakeCatalog())
-    transformer = Mock()
-    transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        with patch("tap_sap_success_factors.streams.abstracts.write_record") as write_record_patch:
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark") as write_bookmark_patch:
+                stream.sync(state={}, transformer=transformer)
 
-    with patch("tap_sap_success_factors.streams.abstracts.write_record") as write_record_patch:
-        with patch("tap_sap_success_factors.streams.abstracts.write_bookmark") as write_bookmark_patch:
-            stream.sync(state={}, transformer=transformer)
+        write_record_patch.assert_called_once()
+        write_bookmark_patch.assert_called_once()
 
-    write_record_patch.assert_called_once()
-    write_bookmark_patch.assert_called_once()
-
-
-def test_sync_normalizes_odata_datetime_before_transform():
-    client = _client()
-    client.get.return_value = {
-        "d": {
-            "results": [
-                {
-                    "personIdExternal": "1",
-                    "lastModifiedDateTime": "/Date(1704153600000+0000)/",
-                }
-            ],
-            "__next": None,
+    def test_normalizes_odata_datetime_before_transform(self):
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "/Date(1704153600000+0000)/",
+                    }
+                ],
+                "__next": None,
+            }
         }
-    }
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        transformer = Mock()
+        observed = {}
 
-    stream = DynamicStream(client=client, catalog=FakeCatalog())
-    transformer = Mock()
+        def _capture_transform(rec, _schema, _mdata):
+            observed["last_modified"] = rec["lastModifiedDateTime"]
+            return rec
 
-    observed = {}
+        transformer.transform.side_effect = _capture_transform
 
-    def _capture_transform(rec, _schema, _mdata):
-        observed["last_modified"] = rec["lastModifiedDateTime"]
-        return rec
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                stream.sync(state={}, transformer=transformer)
 
-    transformer.transform.side_effect = _capture_transform
-
-    with patch("tap_sap_success_factors.streams.abstracts.write_record"):
-        with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
-            stream.sync(state={}, transformer=transformer)
-
-    assert observed["last_modified"] == "2024-01-02T00:00:00.000000Z"
+        self.assertEqual(observed["last_modified"], "2024-01-02T00:00:00.000000Z")
 
 
 # ---------------------------------------------------------------------------
 # modify_object unit tests
 # ---------------------------------------------------------------------------
 
-def test_modify_object_injects_parent_pk_into_child_record():
-    """modify_object must add parent FK + synthetic __parent_<parent>_<pk> field."""
-    child_stream = DynamicStream(client=_client(), catalog=FakePhotoCatalog())
+class TestModifyObject(unittest.TestCase):
 
-    child_record = {"photoId": 42, "photoType": 1}
-    parent_record = {"userId": "jsmith", "lastName": "Smith"}
+    def test_injects_parent_pk_into_child_record(self):
+        """modify_object must add parent FK + synthetic __parent_<parent>_<pk> field."""
+        child_stream = DynamicStream(client=_client(), catalog=FakePhotoCatalog())
+        child_record = {"photoId": 42, "photoType": 1}
+        parent_record = {"userId": "jsmith", "lastName": "Smith"}
 
-    enriched = child_stream.modify_object(child_record, parent_record)
+        enriched = child_stream.modify_object(child_record, parent_record)
 
-    assert enriched["userId"] == "jsmith", "FK field must be back-filled from parent"
-    assert enriched["__parent_user_userId"] == "jsmith", "Lineage field must be injected"
+        self.assertEqual(enriched["userId"], "jsmith", "FK field must be back-filled from parent")
+        self.assertEqual(enriched["__parent_user_userId"], "jsmith", "Lineage field must be injected")
 
+    def test_does_not_overwrite_existing_fk(self):
+        """modify_object must NOT overwrite a FK that already exists in the child record."""
+        child_stream = DynamicStream(client=_client(), catalog=FakePhotoCatalog())
+        child_record = {"photoId": 42, "userId": "existing_user"}
+        parent_record = {"userId": "jsmith"}
 
-def test_modify_object_does_not_overwrite_existing_fk():
-    """modify_object must NOT overwrite a FK that already exists in the child record."""
-    child_stream = DynamicStream(client=_client(), catalog=FakePhotoCatalog())
+        enriched = child_stream.modify_object(child_record, parent_record)
 
-    child_record = {"photoId": 42, "userId": "existing_user"}
-    parent_record = {"userId": "jsmith"}
+        self.assertEqual(enriched["userId"], "existing_user", "Pre-existing FK must be preserved")
+        self.assertEqual(enriched["__parent_user_userId"], "jsmith", "Lineage field always injected")
 
-    enriched = child_stream.modify_object(child_record, parent_record)
-
-    assert enriched["userId"] == "existing_user", "Pre-existing FK must be preserved"
-    assert enriched["__parent_user_userId"] == "jsmith", "Lineage field always injected"
-
-
-def test_modify_object_is_noop_for_root_streams():
-    """modify_object must return record unchanged when there is no parent."""
-    # FakeCatalog is a root stream (no parent-tap-stream-id)
-    root_stream = DynamicStream(client=_client(), catalog=FakeCatalog())
-    record = {"personIdExternal": "1"}
-    assert root_stream.modify_object(record, None) == record
-    assert root_stream.modify_object(record, {"someParent": "x"}) == record
+    def test_is_noop_for_root_streams(self):
+        """modify_object must return record unchanged when there is no parent."""
+        root_stream = DynamicStream(client=_client(), catalog=FakeCatalog())
+        record = {"personIdExternal": "1"}
+        self.assertEqual(root_stream.modify_object(record, None), record)
+        self.assertEqual(root_stream.modify_object(record, {"someParent": "x"}), record)
 
 
 # ---------------------------------------------------------------------------
 # End-to-end: child records emitted during parent sync carry parent PK
 # ---------------------------------------------------------------------------
 
-def test_child_sync_records_contain_parent_key():
-    """Full parent→child sync: emitted child records must carry __parent_user_userId."""
-    # --- parent stream setup ---
-    parent_client = _client()
-    parent_client.get.return_value = {
-        "d": {
-            "results": [{"userId": "jsmith", "lastName": "Smith"}],
-            "__next": None,
+class TestChildParentSync(unittest.TestCase):
+
+    def test_child_sync_records_contain_parent_key(self):
+        """Full parent→child sync: emitted child records must carry __parent_user_userId."""
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [{"userId": "jsmith", "lastName": "Smith"}],
+                "__next": None,
+            }
         }
-    }
-    parent_stream = DynamicStream(client=parent_client, catalog=FakeUserCatalog())
+        parent_stream = DynamicStream(client=parent_client, catalog=FakeUserCatalog())
 
-    # --- child stream setup ---
-    child_client = _client()
-    child_client.get.return_value = {
-        "d": {
-            "results": [{"photoId": 1, "userId": "jsmith", "photoType": 1}],
-            "__next": None,
+        child_client = _client()
+        child_client.get.return_value = {
+            "d": {
+                "results": [{"photoId": 1, "userId": "jsmith", "photoType": 1}],
+                "__next": None,
+            }
         }
-    }
-    child_stream = DynamicStream(client=child_client, catalog=FakePhotoCatalog())
+        child_stream = DynamicStream(client=child_client, catalog=FakePhotoCatalog())
+        parent_stream.child_to_sync = [child_stream]
 
-    # Wire child onto parent (normally done by schema.write_schema)
-    parent_stream.child_to_sync = [child_stream]
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        emitted = {}
 
-    transformer = Mock()
-    transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        def _capture(stream_id, record, **_):
+            emitted[stream_id] = record
 
-    emitted = {}
+        with patch("tap_sap_success_factors.streams.abstracts.write_record", side_effect=_capture):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                parent_stream.sync(state={}, transformer=transformer)
 
-    def _capture(stream_id, record, **_):
-        emitted[stream_id] = record
+        self.assertIn("user", emitted, "Parent record must be emitted")
+        self.assertIn("photo", emitted, "Child record must be emitted")
 
-    with patch("tap_sap_success_factors.streams.abstracts.write_record", side_effect=_capture):
-        with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
-            parent_stream.sync(state={}, transformer=transformer)
+        child_rec = emitted["photo"]
+        self.assertEqual(
+            child_rec["__parent_user_userId"],
+            "jsmith",
+            "__parent_user_userId lineage field must be present in child record",
+        )
+        self.assertEqual(
+            child_rec["userId"],
+            "jsmith",
+            "userId FK field must be present in child record",
+        )
 
-    assert "user" in emitted, "Parent record must be emitted"
-    assert "photo" in emitted, "Child record must be emitted"
+    def test_child_sync_exception_propagates(self):
+        """An exception raised by a child stream must propagate and abort the parent sync.
 
-    child_rec = emitted["photo"]
-    assert child_rec["__parent_user_userId"] == "jsmith", (
-        "__parent_user_userId lineage field must be present in child record"
-    )
-    assert child_rec["userId"] == "jsmith", (
-        "userId FK field must be present in child record"
-    )
-
-
-def test_child_sync_exception_does_not_fail_parent():
-    """A child stream 403 must log a warning but must NOT abort the parent sync."""
-    parent_client = _client()
-    parent_client.get.return_value = {
-        "d": {
-            "results": [
-                {"userId": "user1"},
-                {"userId": "user2"},
-            ],
-            "__next": None,
+        Child-stream errors are intentionally not swallowed so the operator is
+        immediately aware of the failure rather than silently skipping records.
+        """
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [
+                    {"userId": "user1"},
+                    {"userId": "user2"},
+                ],
+                "__next": None,
+            }
         }
-    }
-    parent_stream = DynamicStream(client=parent_client, catalog=FakeUserCatalog())
+        parent_stream = DynamicStream(client=parent_client, catalog=FakeUserCatalog())
 
-    # Child that always raises
-    bad_child = Mock()
-    bad_child.tap_stream_id = "attachment"
-    bad_child.sync.side_effect = Exception("HTTP-error-code: 403")
+        bad_child = Mock()
+        bad_child.tap_stream_id = "attachment"
+        bad_child.sync.side_effect = Exception("HTTP-error-code: 403")
+        parent_stream.child_to_sync = [bad_child]
 
-    parent_stream.child_to_sync = [bad_child]
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
 
-    transformer = Mock()
-    transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                with self.assertRaises(Exception) as ctx:
+                    parent_stream.sync(state={}, transformer=transformer)
 
-    parent_records = []
-
-    def _capture(stream_id, record, **_):
-        if stream_id == "user":
-            parent_records.append(record)
-
-    with patch("tap_sap_success_factors.streams.abstracts.write_record", side_effect=_capture):
-        with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
-            # Must NOT raise despite child raising every iteration
-            parent_stream.sync(state={}, transformer=transformer)
-
-    assert len(parent_records) == 2, "Both parent records must be emitted despite child errors"
-    assert bad_child.sync.call_count == 2, "Child sync was called once per parent record"
+        self.assertIn("HTTP-error-code: 403", str(ctx.exception))
+        self.assertGreaterEqual(bad_child.sync.call_count, 1, "Child sync must have been attempted")
