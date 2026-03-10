@@ -299,7 +299,7 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
         "GET",
         endpoint,
         headers={
-            "Authorization": f"Bearer {client.get_access_token()}",
+            "Authorization": client.get_auth_header(),
             "Accept": "application/xml",
         },
     )
