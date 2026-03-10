@@ -9,9 +9,8 @@ from tap_sap_success_factors.sync import sync
 
 LOGGER = singer.get_logger()
 
-REQUIRED_CONFIG_KEYS = ["client_id", "user_id",
-                        "company_id", "assertion",
-                        "api_server", "start_date"]
+REQUIRED_CONFIG_KEYS = ["client_id", "user_id", "company_id",
+                        "username", "password", "api_server", "start_date"]
 
 
 def do_discover(client: SuccessFactorsClient):
