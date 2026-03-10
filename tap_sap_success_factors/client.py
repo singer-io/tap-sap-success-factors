@@ -9,7 +9,8 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout
 from singer import get_logger, metrics
 
-from tap_sap_success_factors.auth import build_token_request
+from tap_sap_success_factors.auth import (build_basic_auth_header,
+                                          build_token_request)
 from tap_sap_success_factors.exceptions import (
     ERROR_CODE_EXCEPTION_MAPPING, SAPSuccessFactorsError,
     SAPSuccessFactorsRateLimitError, SAPSuccessFactorsServer5xxError)
@@ -87,6 +88,8 @@ class SAPSuccessFactorsClient:
         self.odata_path = self.config.get("odata_path", "/odata/v2")
         self._access_token = self.config.get("access_token")
         self._expires_at = None
+        # Computed once at construction; None when not in basic-auth mode.
+        self._basic_auth_header = build_basic_auth_header(config)
 
         config_request_timeout = self.config.get("request_timeout")
         self.request_timeout = (
@@ -101,7 +104,16 @@ class SAPSuccessFactorsClient:
         self._session.close()
 
     def refresh_access_token(self) -> None:
-        """Get/refresh access token when static token is not supplied."""
+        """Get/refresh access token when static token is not supplied.
+
+        For Basic-auth mode (``username`` + ``password`` in config) no OAuth
+        token exchange is needed — every request is authenticated via the
+        ``Authorization: Basic <base64>`` header built at construction time.
+        """
+        if self._basic_auth_header:
+            # Basic auth — no token needed.
+            return
+
         if self.config.get("access_token"):
             self._access_token = self.config["access_token"]
             return
@@ -136,9 +148,20 @@ class SAPSuccessFactorsClient:
         self.refresh_access_token()
         return self._access_token
 
+    def get_auth_header(self) -> str:
+        """Return the full ``Authorization`` header value for the configured
+        authentication mode.
+
+        - **Basic auth** (``username`` + ``password``): ``Basic <base64>``
+        - **OAuth / SAML bearer** (all other modes): ``Bearer <token>``
+        """
+        if self._basic_auth_header:
+            return self._basic_auth_header
+        return f"Bearer {self.get_access_token()}"
+
     def authenticate(self, headers: Dict, params: Dict) -> Tuple[Dict, Dict]:
         """Inject auth headers and default OData params."""
-        headers["Authorization"] = f"Bearer {self.get_access_token()}"
+        headers["Authorization"] = self.get_auth_header()
         headers["Accept"] = "application/json"
         params["$format"] = "json"
         return headers, params

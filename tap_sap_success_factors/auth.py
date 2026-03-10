@@ -1,8 +1,26 @@
-from typing import Dict
+import base64
+from typing import Dict, Optional
 
 from singer import get_logger
 
 LOGGER = get_logger()
+
+
+def build_basic_auth_header(config: Dict) -> Optional[str]:
+    """Return a ``Basic <base64>`` authorization header value when the config
+    contains ``username`` and ``password``.
+
+    The encoded token is ``base64(username:password)`` per RFC 7617.
+    Returns ``None`` when the required keys are absent so callers can fall
+    back to the OAuth / SAML bearer flow.
+    """
+    username = config.get("username")
+    password = config.get("password")
+    if username and password:
+        token = base64.b64encode(f"{username}:{password}".encode()).decode()
+        LOGGER.info("Using HTTP Basic authentication for user '%s'", username)
+        return f"Basic {token}"
+    return None
 
 
 def build_token_request(config: Dict) -> Dict:
