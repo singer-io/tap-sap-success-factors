@@ -154,3 +154,141 @@ class TestChildSchemaParentFields(unittest.TestCase):
         self.assertEqual(stream_defs["child_entity"]["parent_filter_field"], "ParentEntityNavId")
         self.assertIn("ParentEntityNavId", child)
         self.assertIn("__parent_parent_entity_parentId", child)
+
+
+# ---------------------------------------------------------------------------
+# SAP sap:filterable annotation tests
+# ---------------------------------------------------------------------------
+
+class TestSAPFilterableAnnotation(unittest.TestCase):
+    """sap:filterable='false' prevents a field from being used as a rep-key."""
+
+    # A stream with lastModifiedDateTime annotated as non-filterable at the
+    # SAP level.  Discovery must fall back to FULL_TABLE.
+    FILTERABLE_FALSE_XML = """\
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+    <edmx:DataServices>
+        <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm"
+                xmlns:sap="http://www.sap.com/Protocols/SAPData"
+                Namespace="SFOData">
+            <EntityType Name="SomeEntity">
+                <Key><PropertyRef Name="id"/></Key>
+                <Property Name="id" Type="Edm.String" Nullable="false"/>
+                <Property Name="lastModifiedDateTime" Type="Edm.DateTime"
+                          sap:filterable="false"/>
+            </EntityType>
+            <EntityContainer Name="Container"
+                m:IsDefaultEntityContainer="true"
+                xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"
+            >
+                <EntitySet Name="SomeEntity"
+                           EntityType="SFOData.SomeEntity"/>
+            </EntityContainer>
+        </Schema>
+    </edmx:DataServices>
+</edmx:Edmx>
+"""
+
+    def test_non_filterable_replication_key_yields_full_table(self):
+        """A lastModifiedDateTime with sap:filterable='false' must not become a
+        replication key — the stream should be FULL_TABLE."""
+        _, _, stream_defs = discover_dynamic_streams(
+            _client(self.FILTERABLE_FALSE_XML)
+        )
+        self.assertEqual(
+            stream_defs["some_entity"]["replication_method"],
+            "FULL_TABLE",
+        )
+        self.assertEqual(
+            stream_defs["some_entity"]["replication_keys"],
+            [],
+        )
+
+    # Same entity without sap:filterable annotation — should be INCREMENTAL.
+    FILTERABLE_DEFAULT_XML = """\
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+    <edmx:DataServices>
+        <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm"
+                Namespace="SFOData">
+            <EntityType Name="SomeEntity">
+                <Key><PropertyRef Name="id"/></Key>
+                <Property Name="id" Type="Edm.String" Nullable="false"/>
+                <Property Name="lastModifiedDateTime" Type="Edm.DateTime"/>
+            </EntityType>
+            <EntityContainer Name="Container"
+                m:IsDefaultEntityContainer="true"
+                xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"
+            >
+                <EntitySet Name="SomeEntity"
+                           EntityType="SFOData.SomeEntity"/>
+            </EntityContainer>
+        </Schema>
+    </edmx:DataServices>
+</edmx:Edmx>
+"""
+
+    def test_filterable_by_default_when_annotation_absent(self):
+        """When sap:filterable is absent the property is filterable by default
+        and lastModifiedDateTime should be selected as a replication key."""
+        _, _, stream_defs = discover_dynamic_streams(
+            _client(self.FILTERABLE_DEFAULT_XML)
+        )
+        self.assertEqual(
+            stream_defs["some_entity"]["replication_method"],
+            "INCREMENTAL",
+        )
+        self.assertEqual(
+            stream_defs["some_entity"]["replication_keys"],
+            ["lastModifiedDateTime"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# FORCED_FULL_TABLE_STREAMS override tests
+# ---------------------------------------------------------------------------
+
+class TestForcedFullTableStreams(unittest.TestCase):
+    """FORCED_FULL_TABLE_STREAMS must override INCREMENTAL even when EDMX marks
+    lastModifiedDateTime as filterable."""
+
+    # ThemeInfo has lastModifiedDateTime with no sap:filterable annotation, so
+    # normally INCREMENTAL, but it is in FORCED_FULL_TABLE_STREAMS.
+    THEME_INFO_XML = """\
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+    <edmx:DataServices>
+        <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm"
+                Namespace="SFOData">
+            <EntityType Name="ThemeInfo">
+                <Key><PropertyRef Name="themeId"/></Key>
+                <Property Name="themeId" Type="Edm.String" Nullable="false"/>
+                <Property Name="lastModifiedDateTime" Type="Edm.DateTime"/>
+            </EntityType>
+            <EntityContainer Name="Container"
+                m:IsDefaultEntityContainer="true"
+                xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"
+            >
+                <EntitySet Name="ThemeInfo"
+                           EntityType="SFOData.ThemeInfo"/>
+            </EntityContainer>
+        </Schema>
+    </edmx:DataServices>
+</edmx:Edmx>
+"""
+
+    def test_forced_full_table_overrides_filterable_replication_key(self):
+        """theme_info is FULL_TABLE because it is in FORCED_FULL_TABLE_STREAMS,
+        even though lastModifiedDateTime appears filterable in EDMX."""
+        _, _, stream_defs = discover_dynamic_streams(
+            _client(self.THEME_INFO_XML)
+        )
+        self.assertEqual(
+            stream_defs["theme_info"]["replication_method"],
+            "FULL_TABLE",
+        )
+        self.assertEqual(
+            stream_defs["theme_info"]["replication_keys"],
+            [],
+        )

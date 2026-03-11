@@ -351,4 +351,147 @@ class TestChildParentSync(unittest.TestCase):
                     parent_stream.sync(state={}, transformer=transformer)
 
         self.assertIn("HTTP-error-code: 403", str(ctx.exception))
-        self.assertGreaterEqual(bad_child.sync.call_count, 1, "Child sync must have been attempted")
+        self.assertGreaterEqual(
+            bad_child.sync.call_count,
+            1,
+            "Child sync must have been attempted",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Catalog fixture for $expand streams
+# ---------------------------------------------------------------------------
+
+class FakeExpandCatalog:
+    """Catalog for a stream fetched via OData $expand from EmpCompensation."""
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "calcId": {"type": ["null", "string"]},
+                    "amount": {"type": ["null", "number"]},
+                },
+            }
+
+    schema = _Schema()
+    stream = "emp_compensation_calculated"
+    tap_stream_id = "emp_compensation_calculated"
+    key_properties = ["calcId"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": True,
+                "entity-set": "EmpCompensationCalculated",
+                "expand-nav-property": "empCompensationCalculatedNav",
+                "expand-parent-entity-set": "EmpCompensation",
+                "valid-replication-keys": [],
+                "forced-replication-method": "FULL_TABLE",
+            },
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
+# _get_records_via_expand unit tests
+# ---------------------------------------------------------------------------
+
+class TestGetRecordsViaExpand(unittest.TestCase):
+    """Tests for BaseStream._get_records_via_expand()."""
+
+    def _stream(self):
+        client = _client()
+        return (
+            DynamicStream(client=client, catalog=FakeExpandCatalog()),
+            client,
+        )
+
+    def test_1_to_many_yields_all_nested_results(self):
+        """Nav property returning a results list yields every nested record."""
+        stream, client = self._stream()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "empId": "e1",
+                        "empCompensationCalculatedNav": {
+                            "results": [
+                                {"calcId": "c1", "amount": 100.0},
+                                {"calcId": "c2", "amount": 200.0},
+                            ]
+                        },
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        records = list(stream.get_records(state={}))
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["calcId"], "c1")
+        self.assertEqual(records[1]["calcId"], "c2")
+
+    def test_1_to_1_yields_single_dict(self):
+        """Nav property returning a plain dict (no results key) yields it."""
+        stream, client = self._stream()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "empId": "e1",
+                        "empCompensationCalculatedNav": {
+                            "calcId": "c1",
+                            "amount": 50.0,
+                        },
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        records = list(stream.get_records(state={}))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["calcId"], "c1")
+
+    def test_deferred_link_is_skipped(self):
+        """Nav property containing __deferred must not yield any record."""
+        stream, client = self._stream()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "empId": "e1",
+                        "empCompensationCalculatedNav": {
+                            "__deferred": {
+                                "uri": "https://example.com/EmpComp/Nav"
+                            }
+                        },
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        records = list(stream.get_records(state={}))
+        self.assertEqual(len(records), 0)
+
+    def test_missing_nav_property_is_skipped(self):
+        """Parent record without the nav property key yields nothing."""
+        stream, client = self._stream()
+        client.get.return_value = {
+            "d": {
+                "results": [{"empId": "e1"}],
+                "__next": None,
+            }
+        }
+        records = list(stream.get_records(state={}))
+        self.assertEqual(len(records), 0)
+
+    def test_missing_expand_parent_entity_set_raises_value_error(self):
+        """get_records raises ValueError when expand_nav_property is set but
+        expand_parent_entity_set is not configured."""
+        stream, client = self._stream()
+        # Simulate an incompletely configured catalog by clearing the field.
+        stream.expand_parent_entity_set = ""
+        with self.assertRaises(ValueError):
+            list(stream.get_records(state={}))

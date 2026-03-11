@@ -192,6 +192,12 @@ class BaseStream(ABC):
     def get_records(self, state: Dict, parent_obj: Dict = None):
         """Iterate records with OData next-link pagination."""
         if self.expand_nav_property:
+            if not self.expand_parent_entity_set:
+                raise ValueError(
+                    f"Stream '{self.tap_stream_id}' has "
+                    f"expand_nav_property='{self.expand_nav_property}' but "
+                    "expand_parent_entity_set is not configured."
+                )
             yield from self._get_records_via_expand(state, parent_obj)
             return
 

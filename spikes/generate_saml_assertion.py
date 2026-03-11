@@ -14,8 +14,9 @@
     Run the script:
         - python generate_saml_assertion.py
     The output will be a base64 encoded SAML assertion that can be used in the OAuth
+    Bearer flow to request an access token.
 
-    NOTE: This workflow will be accomodated in the SuccessFactors API client library,
+    NOTE: This workflow will be accommodated in the SuccessFactors API client library,
     so this script is primarily for demonstration and testing purposes.
 """
 
