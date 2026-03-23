@@ -615,13 +615,10 @@ class TestProbeAllStreams(unittest.TestCase):
 # Constants sanity
 # ---------------------------------------------------------------------------
 
+
 class TestProbeConstants(unittest.TestCase):
     def test_probe_timeout_positive(self):
         self.assertGreater(PROBE_TIMEOUT, 0)
 
     def test_probe_max_workers_positive(self):
         self.assertGreater(PROBE_MAX_WORKERS, 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
