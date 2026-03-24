@@ -13,12 +13,15 @@ class TestBuildBasicAuthHeader(unittest.TestCase):
     def test_returns_basic_token(self):
         """Valid username+password produces a correctly encoded Basic header."""
         header = build_basic_auth_header(
-            {"username": "sfdev1@SFCPART002635", "password": "Secret123"}
+            {
+                "username": "test_username",
+                "password": "not_a_real_password",
+            }
         )
         self.assertIsNotNone(header)
         self.assertTrue(header.startswith("Basic "))
         decoded = base64.b64decode(header.split(" ", 1)[1]).decode()
-        self.assertEqual(decoded, "sfdev1@SFCPART002635:Secret123")
+        self.assertEqual(decoded, "test_username:not_a_real_password")
 
     def test_missing_password_returns_none(self):
         """Only username present — must return None (fall back to OAuth)."""

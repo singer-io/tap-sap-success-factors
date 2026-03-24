@@ -32,14 +32,14 @@ class TestBasicAuth(unittest.TestCase):
             {
                 "api_server": "https://example.com",
                 "start_date": "2024-01-01T00:00:00Z",
-                "username": "sfdev1@SFCPART002635",
-                "password": "Secret123",
+                "username": "test_username",
+                "password": "not_a_real_password",
             }
         )
         self.assertIsNotNone(client._basic_auth_header)
         self.assertTrue(client._basic_auth_header.startswith("Basic "))
         decoded = base64.b64decode(client._basic_auth_header.split(" ", 1)[1]).decode()
-        self.assertEqual(decoded, "sfdev1@SFCPART002635:Secret123")
+        self.assertEqual(decoded, "test_username:not_a_real_password")
 
     def test_refresh_token_is_skipped(self):
         """refresh_access_token must be a no-op when basic auth is configured."""
@@ -47,8 +47,8 @@ class TestBasicAuth(unittest.TestCase):
             {
                 "api_server": "https://example.com",
                 "start_date": "2024-01-01T00:00:00Z",
-                "username": "sfdev1@SFCPART002635",
-                "password": "Secret123",
+                "username": "test_username",
+                "password": "not_a_real_password",
             }
         )
         client._session = Mock()
@@ -62,7 +62,7 @@ class TestBasicAuth(unittest.TestCase):
                 "api_server": "https://example.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
-                "password": "pass",
+                "password": "not_a_real_password",
             }
         )
         header = client.get_auth_header()
@@ -76,7 +76,7 @@ class TestBasicAuth(unittest.TestCase):
                 "api_server": "https://example.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
-                "password": "pass",
+                "password": "not_a_real_password",
                 "access_token": "should_be_ignored",
             }
         )
@@ -89,7 +89,7 @@ class TestBasicAuth(unittest.TestCase):
                 "api_server": "https://example.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
-                "password": "pass",
+                "password": "not_a_real_password",
             }
         )
         headers, params = client.authenticate({}, {})
