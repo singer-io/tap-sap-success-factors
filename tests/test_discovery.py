@@ -9,11 +9,19 @@ class SAPSFDiscoveryTest(DiscoveryTest, SAPSuccessFactorsBaseTest):
     """Test tap discovery mode and metadata conforms to standards.
 
     Validates:
-      - All 142 expected streams appear in the discovered catalog.
+      - All expected *reachable* streams appear in the discovered catalog.
       - Each stream's replication method and replication key(s) match
         the values declared in ``expected_metadata()``.
       - Child streams carry the correct ``parent-tap-stream-id`` entry
         in their catalog root-level metadata.
+
+    Note: SAP SuccessFactors performs a live HTTP probe during discovery
+    and excludes streams that return HTTP 4xx/5xx (feature not enabled,
+    insufficient permissions, etc.).  These streams are listed in
+    ``streams_to_exclude()`` and are intentionally absent from the
+    catalog.  All tests that iterate the catalog are scoped to the
+    testable set (``expected_stream_names() - streams_to_exclude()``)
+    so that probe-excluded streams do not cause false failures.
     """
 
     @staticmethod
@@ -22,12 +30,103 @@ class SAPSFDiscoveryTest(DiscoveryTest, SAPSuccessFactorsBaseTest):
         return "tap_tester_sap_sf_discovery_test"
 
     def streams_to_test(self):
-        """Discovery is independent of data availability.
+        """Return all streams actually present in the discovered catalog.
 
-        Return all 142 expected streams so that catalog structure and
-        metadata are validated for every stream the tap can produce.
+        SAP SF's discovery probe excludes streams that return HTTP 4xx/5xx
+        (permissions not granted, feature not enabled, etc.).  Using the live
+        catalog as the scope for ``streams_to_test()`` means that every
+        per-stream test method (``test_unsupported_fields``,
+        ``test_available_fields``, ``test_replication_metadata``, etc.) only
+        iterates streams that are known to exist in ``found_catalogs``,
+        avoiding ``IndexError`` on the catalog-lookup ``[...][0]`` calls.
+
+        Falls back to ``expected_stream_names() - streams_to_exclude()`` before
+        ``setUp()`` has populated ``found_catalogs``.
         """
-        return self.expected_stream_names()
+        if DiscoveryTest.found_catalogs:
+            return {c["stream_name"] for c in DiscoveryTest.found_catalogs}
+        return self.expected_stream_names() - self.streams_to_exclude()
+
+    # ---------------------------------------------------------------------- #
+    # Overrides: relax strict equality to account for probe-excluded streams  #
+    # ---------------------------------------------------------------------- #
+
+    def test_number_of_streams(self):
+        """Verify discovered catalog is within the expected stream-count bounds.
+
+        The base asserts ``len(found_catalogs) == len(expected_stream_names())``.
+        For SAP SF the probe dynamically excludes inaccessible streams, so an
+        exact count cannot be hard-coded.  We assert:
+
+        * At least every *testable* stream (``expected - excluded``) is present.
+        * No more streams than the total expected set are in the catalog.
+        """
+        testable = self.expected_stream_names() - self.streams_to_exclude()
+        n_found = len(self.found_catalogs)
+        n_expected = len(self.expected_stream_names())
+        n_testable = len(testable)
+        with self.subTest(msg="validating number of actual streams discovered"):
+            self.assertGreaterEqual(
+                n_found, n_testable,
+                logging=(
+                    f"catalog has {n_found} streams; at least {n_testable} "
+                    f"testable streams must be present"
+                ),
+            )
+            self.assertLessEqual(
+                n_found, n_expected,
+                logging=(
+                    f"catalog has {n_found} streams; must not exceed "
+                    f"{n_expected} total expected streams"
+                ),
+            )
+
+    def test_streams_discovered(self):
+        """Verify catalog stream membership against expected_metadata.
+
+        Three assertions (each a subTest):
+        1. Every *testable* stream is in the catalog.
+        2. No catalog stream is unknown (absent from ``expected_metadata()``).
+        3. Every expected stream absent from the catalog is listed in
+           ``streams_to_exclude()`` so the gap is intentional.
+        """
+        found_stream_names = {c["stream_name"] for c in self.found_catalogs}
+        testable = self.expected_stream_names() - self.streams_to_exclude()
+
+        with self.subTest(msg="validating testable streams present in catalog"):
+            missing = testable - found_stream_names
+            self.assertFalse(
+                missing,
+                msg=(
+                    f"Testable streams missing from catalog: {missing}. "
+                    f"Add them to streams_to_exclude() if inaccessible."
+                ),
+            )
+
+        with self.subTest(
+            msg="validating all catalog streams are known in expected_metadata"
+        ):
+            extra = found_stream_names - self.expected_stream_names()
+            self.assertFalse(
+                extra,
+                msg=(
+                    f"Catalog streams not in expected_metadata(): {extra}. "
+                    f"Add them to expected_metadata()."
+                ),
+            )
+
+        with self.subTest(
+            msg="validating all absent expected streams are in streams_to_exclude"
+        ):
+            not_in_catalog = self.expected_stream_names() - found_stream_names
+            uncovered = not_in_catalog - self.streams_to_exclude()
+            self.assertFalse(
+                uncovered,
+                msg=(
+                    f"Streams absent from catalog but not in streams_to_exclude(): "
+                    f"{uncovered}. Add them to streams_to_exclude()."
+                ),
+            )
 
     # ---------------------------------------------------------------------- #
     # Custom test: replication metadata                                       #

@@ -37,8 +37,8 @@ class SAPSFBookmarkTest(BookmarkTest, SAPSuccessFactorsBaseTest):
 
     initial_bookmarks = {
         "bookmarks": {
-            "rbp_role": {"lastModifiedDate":     "2021-01-01T00:00:00.000Z"},
-            "user":     {"lastModifiedDateTime": "2021-01-01T00:00:00.000Z"},
+            "rbp_role": {"lastModifiedDate":     "2021-01-01T00:00:00.000000Z"},
+            "user":     {"lastModifiedDateTime": "2021-01-01T00:00:00.000000Z"},
         }
     }
 
