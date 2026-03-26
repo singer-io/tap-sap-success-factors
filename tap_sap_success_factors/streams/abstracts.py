@@ -271,7 +271,7 @@ class BaseStream(ABC):
             response = self.client.request_raw(
                 "GET",
                 next_link,
-                headers={"Authorization": f"Bearer {self.client.get_access_token()}"},
+                headers={"Authorization": self.client.get_auth_header()},
             )
             payload = response.json()
 

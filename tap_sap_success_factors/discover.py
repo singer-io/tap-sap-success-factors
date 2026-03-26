@@ -18,7 +18,7 @@ def discover(client=None) -> Catalog:
 
     Phase 2 — Discovery-time probe validation
         Send a ``$top=1`` GET to every entity set endpoint.  Streams whose
-        endpoint unconditionally returns HTTP 400 are removed from the catalog
+        endpoint unconditionally returns HTTP 4xx/5xx are removed from the catalog
         before it is emitted.  This prevents downstream sync runs from wasting
         time retrying endpoints that SAP will never serve (e.g. navigation-only
         entities that require ``COE0018`` composite-key filters, or
@@ -30,7 +30,7 @@ def discover(client=None) -> Catalog:
     # Phase 1: parse EDMX
     schemas, field_metadata, stream_defs = discover_dynamic_streams(client)
 
-    # Phase 2: probe each stream; collect those that return HTTP 400
+    # Phase 2: probe each stream; collect those that return HTTP 4xx/5xx
     excluded_streams = probe_all_streams(client, stream_defs)
 
     catalog = Catalog([])
