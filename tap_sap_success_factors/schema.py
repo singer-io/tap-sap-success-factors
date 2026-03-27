@@ -1,6 +1,8 @@
-from singer import metadata
+from singer import get_logger, metadata
 
 from tap_sap_success_factors.streams.dynamic import DynamicStream
+
+LOGGER = get_logger()
 
 
 def _build_child_map(catalog):
@@ -33,6 +35,14 @@ def write_schema(stream, client, streams_to_sync, catalog, visited=None, child_m
 
     for child_stream_name in child_map.get(stream.tap_stream_id, []):
         child_catalog = catalog.get_stream(child_stream_name)
+        # Safety net: discovery guarantees child streams exist in the catalog,
+        # but guard defensively for externally-modified or corrupted catalogs.
+        if child_catalog is None or child_catalog.schema is None:
+            LOGGER.warning(
+                "Child stream '%s' not found in catalog or has no schema, skipping schema write.",
+                child_stream_name,
+            )
+            continue
         child_stream = DynamicStream(client, child_catalog, child_map=child_map)
 
         write_schema(

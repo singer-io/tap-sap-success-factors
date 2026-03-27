@@ -36,34 +36,47 @@ def sync(client, config: Dict, catalog: singer.Catalog, state: Dict) -> None:
 
     last_stream = singer.get_currently_syncing(state)
     LOGGER.info("last/currently syncing stream: %s", last_stream)
-    failed_streams = []
 
     with singer.Transformer() as transformer:
         for stream_name in streams_to_sync:
             catalog_stream = catalog.get_stream(stream_name)
+            if catalog_stream is None:
+                LOGGER.warning(
+                    "Stream '%s' not found in catalog, skipping.", stream_name
+                )
+                continue
+            if catalog_stream.schema is None:
+                LOGGER.warning(
+                    "Stream '%s' has no schema in catalog, skipping.", stream_name
+                )
+                continue
+
             stream = DynamicStream(client, catalog_stream, child_map=child_map)
 
             if stream.parent:
                 if stream.parent not in streams_to_sync:
-                    streams_to_sync.append(stream.parent)
+                    # Only append the parent if it exists in the catalog.
+                    # Discovery-time validation ensures this for freshly generated
+                    # catalogs; this guard handles externally-modified catalogs.
+                    if catalog.get_stream(stream.parent) is not None:
+                        streams_to_sync.append(stream.parent)
+                    else:
+                        LOGGER.warning(
+                            "Stream '%s' declares parent '%s' which is not in the "
+                            "catalog. Stream will be skipped.",
+                            stream_name,
+                            stream.parent,
+                        )
                 continue
 
-            try:
-                write_schema(stream, client, streams_to_sync, catalog, child_map=child_map)
-                LOGGER.info("START Syncing: %s", stream_name)
-                update_currently_syncing(state, stream_name)
-                total_records = stream.sync(state=state, transformer=transformer)
+            write_schema(stream, client, streams_to_sync, catalog, child_map=child_map)
+            LOGGER.info("START Syncing: %s", stream_name)
+            update_currently_syncing(state, stream_name)
+            total_records = stream.sync(state=state, transformer=transformer)
 
-                update_currently_syncing(state, None)
-                LOGGER.info(
-                    "FINISHED Syncing: %s, total_records: %s",
-                    stream_name,
-                    total_records,
-                )
-            except Exception as err:  # pragma: no cover
-                failed_streams.append(stream_name)
-                update_currently_syncing(state, None)
-                LOGGER.warning("FAILED Syncing: %s, error: %s", stream_name, err)
-
-    if failed_streams:
-        LOGGER.warning("Streams failed due to permissions/availability: %s", failed_streams)
+            update_currently_syncing(state, None)
+            LOGGER.info(
+                "FINISHED Syncing: %s, total_records: %s",
+                stream_name,
+                total_records,
+            )

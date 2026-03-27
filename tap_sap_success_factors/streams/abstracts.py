@@ -10,6 +10,10 @@ from singer.utils import strftime, strptime_with_tz
 
 LOGGER = get_logger()
 ODATA_DATE_RE = re.compile(r"^/Date\((?P<millis>-?\d+)(?P<offset>[+-]\d{4})?\)/$")
+# Reference point for /Date(ms)/ → datetime arithmetic.
+# Using timedelta from this epoch avoids os.mktime() which on Windows
+# only handles timestamps within 1970-01-01..~year 3001.
+_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class BaseStream(ABC):
@@ -26,9 +30,26 @@ class BaseStream(ABC):
     date_fields = []
     parent_filter_field = ""
     parent_key_field = "personIdExternal"
+    # Optional secondary filter for multi-field parent filter expressions.
+    parent_secondary_filter_field = ""
+    parent_secondary_key_field = ""
+    # OData $expand support: fetch this stream by expanding a nav property on
+    # expand_parent_entity_set instead of querying the entity set directly.
+    expand_nav_property = ""
+    expand_parent_entity_set = ""
     path = ""
 
     def __init__(self, client=None, catalog=None) -> None:
+        if catalog is None:
+            raise ValueError(
+                "catalog entry must not be None — ensure the stream exists in the catalog "
+                "before constructing a stream instance."
+            )
+        if catalog.schema is None:
+            raise ValueError(
+                f"catalog entry '{catalog.tap_stream_id}' has no schema — the catalog may be "
+                "malformed or the stream was not discovered correctly."
+            )
         self.client = client
         self.catalog = catalog
         self.schema = catalog.schema.to_dict()
@@ -62,6 +83,13 @@ class BaseStream(ABC):
         if parent_obj and self.parent_filter_field:
             parent_val = parent_obj[self.parent_key_field]
             clause = f"{self.parent_filter_field} eq '{parent_val}'"
+            # Append optional secondary filter field (e.g. activityObjectType).
+            if self.parent_secondary_filter_field and self.parent_secondary_key_field:
+                sec_val = parent_obj.get(self.parent_secondary_key_field, "")
+                if sec_val is not None and sec_val != "":
+                    clause += (
+                        f" and {self.parent_secondary_filter_field} eq '{sec_val}'"
+                    )
             params["$filter"] = (
                 f"{params['$filter']} and {clause}" if "$filter" in params else clause
             )
@@ -105,7 +133,18 @@ class BaseStream(ABC):
                     pass
 
     def _coerce_odata_datetime(self, value: Any) -> Any:
-        """Convert SAP OData V2 /Date(1704153600000+0000)/ values to RFC3339."""
+        """Convert SAP OData V2 /Date(ms±offset)/ values to RFC 3339.
+
+        datetime.fromtimestamp() delegates to the OS mktime() which on
+        Windows only accepts timestamps in 1970-01-01..~3001.  SAP uses
+        /Date(-2208988800000)/ (1900-01-01) as a sentinel min-date and
+        /Date(253402214400000)/ (9999-12-31) as a sentinel max-date — both
+        are outside that range and cause OSError 22 on Windows.
+
+        Using timedelta arithmetic from the Unix epoch bypasses mktime
+        entirely and works for the full Python datetime range (years 1-9999)
+        on every platform.
+        """
         if not isinstance(value, str):
             return value
 
@@ -114,9 +153,10 @@ class BaseStream(ABC):
             return value
 
         try:
-            dt_val = datetime.fromtimestamp(int(match.group("millis")) / 1000, tz=timezone.utc)
+            millis = int(match.group("millis"))
+            dt_val = _UNIX_EPOCH + timedelta(milliseconds=millis)
             return strftime(dt_val)
-        except (OverflowError, OSError, TypeError, ValueError):  # pragma: no cover
+        except (OverflowError, OSError, TypeError, ValueError):
             return value
 
     def _normalize_datetimes_with_schema(self, value: Any, schema: Dict) -> Any:
@@ -167,12 +207,62 @@ class BaseStream(ABC):
 
     def get_records(self, state: Dict, parent_obj: Dict = None):
         """Iterate records with OData next-link pagination."""
+        if self.expand_nav_property:
+            if not self.expand_parent_entity_set:
+                raise ValueError(
+                    f"Stream '{self.tap_stream_id}' has "
+                    f"expand_nav_property='{self.expand_nav_property}' but "
+                    "expand_parent_entity_set is not configured."
+                )
+            yield from self._get_records_via_expand(state, parent_obj)
+            return
+
         path = self.path or f"{self.client.odata_path}/{self.entity}"
         params = self.build_params(state, parent_obj)
         payload = self.client.get(path, params=params)
 
         while True:
             yield from self.parse_odata_records(payload)
+
+            next_link = self.get_next_link(payload)
+            if not next_link:
+                break
+
+            response = self.client.request_raw(
+                "GET",
+                next_link,
+                headers={"Authorization": self.client.get_auth_header()},
+            )
+            payload = response.json()
+
+    def _get_records_via_expand(self, state: Dict, parent_obj: Dict = None):
+        """Fetch records via OData $expand from a parent entity set.
+
+        Queries ``expand_parent_entity_set`` with ``$expand=<nav_property>``
+        and extracts the nested records from the navigation property of every
+        parent record.  Handles both 1-to-many (results list) and 1-to-1
+        (single object) navigation properties.
+        """
+        path = self.path  # already set to parent entity set path in __init__
+        params = self.build_params(state, parent_obj)
+        params["$expand"] = self.expand_nav_property
+        payload = self.client.get(path, params=params)
+
+        while True:
+            for parent_record in self.parse_odata_records(payload):
+                nav_data = parent_record.get(self.expand_nav_property)
+                if not nav_data or not isinstance(nav_data, dict):
+                    continue
+                # Skip OData deferred links (navigation not yet expanded).
+                if "__deferred" in nav_data:
+                    continue
+                results = nav_data.get("results")
+                if results is not None:
+                    # 1-to-many: {"results": [...]}
+                    yield from results
+                else:
+                    # 1-to-1: nav_data is the record itself.
+                    yield nav_data
 
             next_link = self.get_next_link(payload)
             if not next_link:
@@ -236,25 +326,21 @@ class BaseStream(ABC):
                     counter.increment()
 
                 for child in self.child_to_sync:
-                    try:
-                        child.sync(
-                            state=state,
-                            transformer=transformer,
-                            parent_obj=record,
-                        )
-                    except Exception as child_err:  # pragma: no cover
-                        LOGGER.warning(
-                            "FAILED child sync %s (parent=%s): %s",
-                            child.tap_stream_id,
-                            self.tap_stream_id,
-                            child_err,
-                        )
+                    child.sync(
+                        state=state,
+                        transformer=transformer,
+                        parent_obj=record,
+                    )
 
             if bookmark_key and current_max_bookmark:
-                self.write_bookmark(state, self.tap_stream_id, value=current_max_bookmark)
+                self.write_bookmark(
+                    state, self.tap_stream_id, value=current_max_bookmark
+                )
 
                 if self.child_to_sync:
-                    parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
+                    parent_bookmark_key = (
+                        f"{self.tap_stream_id}_{bookmark_key}"
+                    )
                     for child in self.child_to_sync:
                         self.write_bookmark(
                             state,
