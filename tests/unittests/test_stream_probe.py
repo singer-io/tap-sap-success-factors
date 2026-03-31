@@ -2,7 +2,10 @@
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
+import requests
+
 from tap_sap_success_factors.stream_probe import (
+    PROBE_MAX_TRIES,
     PROBE_MAX_WORKERS,
     PROBE_TIMEOUT,
     probe_all_streams,
@@ -91,18 +94,42 @@ class TestProbeStream(unittest.TestCase):
         self.assertEqual(result["status"], 500)
         self.assertIn("Internal Server Error", result["error"])
 
-    @patch(
-        "tap_sap_success_factors.stream_probe.requests.get",
-        side_effect=__import__("requests").exceptions.Timeout,
-    )
-    def test_timeout_returns_none_status(self, _mock_get):
-        """A network timeout returns status=None with error='timeout'."""
+    @patch("tap_sap_success_factors.stream_probe.requests.get")
+    def test_timeout_returns_none_status(self, mock_get):
+        """After PROBE_MAX_TRIES timeouts, status=None with error='timeout'.
+
+        The backoff decorator retries on requests.exceptions.Timeout up to
+        PROBE_MAX_TRIES times before the exception handler returns None.
+        """
+        mock_get.side_effect = requests.exceptions.Timeout
+
         result = probe_stream(
-            "Bearer tok", "https://api.example.com", "some_stream", "/odata/v2/SomeStream"
+            "Bearer tok", "https://api.example.com",
+            "some_stream", "/odata/v2/SomeStream"
         )
 
+        # requests.get must have been called exactly PROBE_MAX_TRIES times
+        # (1 initial attempt + PROBE_MAX_TRIES-1 retries).
+        self.assertEqual(mock_get.call_count, PROBE_MAX_TRIES)
         self.assertIsNone(result["status"])
         self.assertEqual(result["error"], "timeout")
+
+    @patch("tap_sap_success_factors.stream_probe.requests.get")
+    def test_timeout_retry_succeeds_on_second_attempt(self, mock_get):
+        """If a retry succeeds, the successful response is returned."""
+        mock_get.side_effect = [
+            requests.exceptions.Timeout,  # 1st attempt — timeout
+            _mock_response(200),           # 2nd attempt — success
+        ]
+
+        result = probe_stream(
+            "Bearer tok", "https://api.example.com",
+            "currency", "/odata/v2/Currency"
+        )
+
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(result["status"], 200)
+        self.assertIsNone(result["error"])
 
     @patch(
         "tap_sap_success_factors.stream_probe.requests.get",

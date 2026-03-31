@@ -40,6 +40,7 @@ are not falsely excluded because they require a mandatory filter:
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Optional, Set
 
+import backoff
 import requests
 import singer
 
@@ -51,10 +52,33 @@ PROBE_TIMEOUT = 20
 # Maximum number of concurrent probe threads.
 PROBE_MAX_WORKERS = 20
 
+# Total attempts per probe (1 initial + 2 retries) on Timeout.
+PROBE_MAX_TRIES = 3
+
 
 # ---------------------------------------------------------------------------
 # Single-stream probe
 # ---------------------------------------------------------------------------
+
+@backoff.on_exception(
+    backoff.expo,
+    requests.exceptions.Timeout,
+    max_tries=PROBE_MAX_TRIES,
+    factor=2,
+    logger=LOGGER,
+)
+def _request_with_retry(url, headers, params):
+    """Make a single GET request, retrying on Timeout via backoff.
+
+    Lets ``requests.exceptions.Timeout`` propagate so the backoff decorator
+    can intercept and schedule retries with exponential back-off.  After all
+    ``PROBE_MAX_TRIES`` attempts are exhausted the exception is re-raised and
+    must be caught by the caller (:func:`probe_stream`).
+    """
+    return requests.get(
+        url, headers=headers, params=params, timeout=PROBE_TIMEOUT
+    )
+
 
 def probe_stream(
     auth_header: str,
@@ -103,9 +127,7 @@ def probe_stream(
         params.update(extra_params)
 
     try:
-        response = requests.get(
-            url, headers=headers, params=params, timeout=PROBE_TIMEOUT
-        )
+        response = _request_with_retry(url, headers, params)
         error_snippet = None
         if 400 <= response.status_code <= 599:
             error_snippet = (response.text[:300] if response.text else "(no body)")
