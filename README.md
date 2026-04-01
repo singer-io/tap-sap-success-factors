@@ -25,7 +25,7 @@ For each discovered entity set:
 
 Supported options:
 
-1. Static access token
+1. Basic Authentication with username and password
 2. OAuth token endpoint with either:
    - refresh token flow
    - saml assertion bearer flow
@@ -36,10 +36,11 @@ Example config:
 {
   "api_server": "https://<company>.successfactors.com",
   "client_id": "...",
+  "user_id": "...",
   "company_id": "...",
-  "assertion": "...",
-  "start_date": "2024-01-01T00:00:00Z",
-  "request_timeout": 300
+  "username": "...",
+  "password": "...",
+  "start_date": "2024-01-01T00:00:00Z"
 }
 ```
 
@@ -50,7 +51,6 @@ python3 -m venv /usr/local/share/virtualenvs/tap-sap-success-factors
 source /usr/local/share/virtualenvs/tap-sap-success-factors/bin/activate
 cd /opt/code/tap-sap-success-factors
 pip install -U pip
-pip install -r requirements.txt
 pip install -e .
 ```
 
@@ -112,7 +112,7 @@ Incremental streams store bookmarks in Singer state using each stream's replicat
 
 ## Parent-Child Streams
 
-Dynamic mode treats entity sets independently. If you need explicit parent-child orchestration for specific entities, add stream-specific rules in a follow-up enhancement.
+Tap uses Navigation Properties in OData metadata to identify parent-child relationships. Child streams are probed with filters based on parent stream replication keys.
 
 ## Development
 

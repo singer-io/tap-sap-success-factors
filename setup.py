@@ -4,14 +4,14 @@ from setuptools import find_packages, setup
 
 setup(
     name="tap-sap-success-factors",
-    version="0.1.0",
+    version="0.0.1",
     description="Singer.io tap for extracting data from SAP SuccessFactors OData v2 APIs",
     author="Singer Community",
     url="http://singer.io",
     classifiers=["Programming Language :: Python :: 3 :: Only"],
     py_modules=["tap_sap_success_factors"],
     install_requires=[
-        "singer-python==6.1.1",
+        "singer-python==6.3.0",
         "requests==2.32.5",
         "backoff==2.2.1",
         "python-dateutil==2.9.0.post0",
