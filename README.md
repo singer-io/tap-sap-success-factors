@@ -34,12 +34,10 @@ Example config:
 
 ```json
 {
-  "api_endpoint": "https://<company>.successfactors.com",
-  "oauth_endpoint": "https://<company>.successfactors.com/oauth/token",
+  "api_server": "https://<company>.successfactors.com",
   "client_id": "...",
   "company_id": "...",
   "assertion": "...",
-  "grant_type": "...",
   "start_date": "2024-01-01T00:00:00Z",
   "request_timeout": 300
 }
