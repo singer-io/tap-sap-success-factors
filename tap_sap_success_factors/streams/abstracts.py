@@ -16,6 +16,28 @@ ODATA_DATE_RE = re.compile(r"^/Date\((?P<millis>-?\d+)(?P<offset>[+-]\d{4})?\)/$
 _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
+def _odata_filter_value(value, field_schema: dict) -> str:
+    """Return a type-appropriate OData ``eq``/``ge`` filter RHS for *value*.
+
+    OData requires integer/number literals to be unquoted and boolean literals
+    to be the bare keywords ``true``/``false``.  Wrapping them in single quotes
+    causes SAP to reject the request with HTTP 400 (type mismatch).
+
+    * ``integer`` / ``number`` → ``eq 12345``  (unquoted)
+    * ``boolean``              → ``eq true``    (bare keyword)
+    * ``string`` / unknown     → ``eq '...'``   (single-quoted)
+    """
+    types = field_schema.get("type", [])
+    if isinstance(types, str):
+        types = [types]
+    if "integer" in types or "number" in types:
+        return f"eq {value}"
+    if "boolean" in types:
+        return f"eq {str(value).lower()}"
+    # string / unknown — wrap in single quotes
+    return f"eq '{value}'"
+
+
 class BaseStream(ABC):
     """Base stream class following tap-harvest style."""
 
@@ -82,13 +104,20 @@ class BaseStream(ABC):
 
         if parent_obj and self.parent_filter_field:
             parent_val = parent_obj[self.parent_key_field]
-            clause = f"{self.parent_filter_field} eq '{parent_val}'"
+            props = self.schema.get("properties", {})
+            pff_schema = props.get(self.parent_filter_field, {})
+            clause = (
+                f"{self.parent_filter_field} "
+                f"{_odata_filter_value(parent_val, pff_schema)}"
+            )
             # Append optional secondary filter field (e.g. activityObjectType).
             if self.parent_secondary_filter_field and self.parent_secondary_key_field:
                 sec_val = parent_obj.get(self.parent_secondary_key_field, "")
                 if sec_val is not None and sec_val != "":
+                    sec_schema = props.get(self.parent_secondary_filter_field, {})
                     clause += (
-                        f" and {self.parent_secondary_filter_field} eq '{sec_val}'"
+                        f" and {self.parent_secondary_filter_field} "
+                        f"{_odata_filter_value(sec_val, sec_schema)}"
                     )
             params["$filter"] = (
                 f"{params['$filter']} and {clause}" if "$filter" in params else clause

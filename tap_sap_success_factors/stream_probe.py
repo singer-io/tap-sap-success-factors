@@ -37,6 +37,7 @@ are not falsely excluded because they require a mandatory filter:
 
 """
 
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Optional, Set
 
@@ -184,8 +185,7 @@ _CHILD_GENUINE_400_CODES = frozenset({
 def _extract_odata_error_code(error_text):
     """Extract the SAP OData error code from a probe response snippet."""
     try:
-        import json as _json  # local import to avoid circular at module level
-        body = _json.loads(error_text)
+        body = json.loads(error_text)
         return body.get("error", {}).get("code", "")
     except Exception:  # pylint: disable=broad-except
         return ""

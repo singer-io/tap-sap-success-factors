@@ -48,13 +48,13 @@ def _get_retry_after(exc) -> int:
 
 def raise_for_error(response: requests.Response) -> None:
     """Raise mapped exception for non-success responses."""
+    if response.status_code in (200, 201, 204):
+        return
+
     try:
         response_json = response.json()
     except ValueError:  # pragma: no cover - response body may not be json
         response_json = {}
-
-    if response.status_code in (200, 201, 204):
-        return
 
     mapped = ERROR_CODE_EXCEPTION_MAPPING.get(response.status_code, {})
     if not mapped and 500 <= response.status_code < 600:
