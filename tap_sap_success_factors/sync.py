@@ -20,7 +20,7 @@ def update_currently_syncing(state: Dict, stream_name: Optional[str]) -> None:
 
 def sync(client, config: Dict, catalog: singer.Catalog, state: Dict) -> None:
     """Sync selected streams from catalog."""
-    del config
+    del config  # ← config is deleted immediately after discovery; sync should rely on config values only via the client, which is initialized with the config.
 
     streams_to_sync = [
         stream.tap_stream_id for stream in catalog.get_selected_streams(state)

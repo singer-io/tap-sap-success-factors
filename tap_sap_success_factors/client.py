@@ -137,7 +137,7 @@ class SAPSuccessFactorsClient:
         expires_in_seconds = int(response_json.get("expires_in", 3600))
         self._expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in_seconds)
 
-    def get_access_token(self) -> str:
+    def get_access_token(self) -> Optional[str]:
         """Return a valid token."""
         if self._access_token and self._expires_at and self._expires_at > datetime.now(tz=timezone.utc):
             return self._access_token

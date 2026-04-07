@@ -17,7 +17,7 @@ _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _odata_filter_value(value, field_schema: dict) -> str:
-    """Return a type-appropriate OData ``eq``/``ge`` filter RHS for *value*.
+    """Return a type-appropriate OData ``eq`` filter RHS for *value*.
 
     OData requires integer/number literals to be unquoted and boolean literals
     to be the bare keywords ``true``/``false``.  Wrapping them in single quotes
