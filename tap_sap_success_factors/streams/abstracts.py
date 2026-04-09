@@ -338,11 +338,22 @@ class BaseStream(ABC):
                 self.append_times_to_dates(transformed_record)
 
                 record_passes_bookmark = True
+                record_value = (
+                    transformed_record.get(bookmark_key)
+                    if bookmark_key
+                    else None
+                )
+
                 if bookmark_key and bookmark:
-                    record_value = transformed_record.get(bookmark_key)
                     record_passes_bookmark = bool(
                         record_value and record_value >= bookmark
                     )
+
+                if record_passes_bookmark:
+                    if self.is_selected():
+                        write_record(self.tap_stream_id, transformed_record)
+                        counter.increment()
+
                     if record_value:
                         current_max_bookmark = (
                             max(current_max_bookmark, record_value)
@@ -350,16 +361,12 @@ class BaseStream(ABC):
                             else record_value
                         )
 
-                if record_passes_bookmark and self.is_selected():
-                    write_record(self.tap_stream_id, transformed_record)
-                    counter.increment()
-
-                for child in self.child_to_sync:
-                    child.sync(
-                        state=state,
-                        transformer=transformer,
-                        parent_obj=record,
-                    )
+                    for child in self.child_to_sync:
+                        child.sync(
+                            state=state,
+                            transformer=transformer,
+                            parent_obj=record,
+                        )
 
             if bookmark_key and current_max_bookmark:
                 self.write_bookmark(
