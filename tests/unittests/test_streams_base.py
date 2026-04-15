@@ -27,7 +27,7 @@ class FakeCatalog:
                 "selected": True,
                 "valid-replication-keys": ["lastModifiedDateTime"],
                 "forced-replication-method": "INCREMENTAL",
-                "entity-set": "PerPerson",
+                "tap-sap-success-factors.entity-set": "PerPerson",
                 "api-path": "/odata/v2/PerPerson",
             },
         }
@@ -54,11 +54,11 @@ class ChildCatalog:
             "breadcrumb": [],
             "metadata": {
                 "selected": True,
-                "entity-set": "UserPermissions",
+                "tap-sap-success-factors.entity-set": "UserPermissions",
                 "api-path": "/odata/v2/UserPermissions",
                 "parent-tap-stream-id": "user",
-                "parent-filter-field": "userId",
-                "parent-key-field": "userId",
+                "tap-sap-success-factors.parent-filter-field": "userId",
+                "tap-sap-success-factors.parent-key-field": "userId",
             },
         }
     ]

@@ -47,7 +47,7 @@ class FakeUserCatalog:
             "breadcrumb": [],
             "metadata": {
                 "selected": True,
-                "entity-set": "User",
+                "tap-sap-success-factors.entity-set": "User",
                 "api-path": "/odata/v2/User",
                 "valid-replication-keys": [],
                 "forced-replication-method": "FULL_TABLE",
@@ -80,11 +80,11 @@ class FakePhotoCatalog:
             "breadcrumb": [],
             "metadata": {
                 "selected": True,
-                "entity-set": "Photo",
+                "tap-sap-success-factors.entity-set": "Photo",
                 "api-path": "/odata/v2/Photo",
                 "parent-tap-stream-id": "user",
-                "parent-filter-field": "userId",
-                "parent-key-field": "userId",
+                "tap-sap-success-factors.parent-filter-field": "userId",
+                "tap-sap-success-factors.parent-key-field": "userId",
                 "valid-replication-keys": [],
                 "forced-replication-method": "FULL_TABLE",
             },
@@ -118,7 +118,7 @@ class FakeCatalog:
                 "selected": True,
                 "valid-replication-keys": ["lastModifiedDateTime"],
                 "forced-replication-method": "INCREMENTAL",
-                "entity-set": "PerPerson",
+                "tap-sap-success-factors.entity-set": "PerPerson",
                 "api-path": "/odata/v2/PerPerson",
             },
         }
@@ -434,9 +434,15 @@ class FakeExpandCatalog:
             "breadcrumb": [],
             "metadata": {
                 "selected": True,
-                "entity-set": "EmpCompensationCalculated",
-                "expand-nav-property": "empCompensationCalculatedNav",
-                "expand-parent-entity-set": "EmpCompensation",
+                "tap-sap-success-factors.entity-set": (
+                    "EmpCompensationCalculated"
+                ),
+                "tap-sap-success-factors.expand-nav-property": (
+                    "empCompensationCalculatedNav"
+                ),
+                "tap-sap-success-factors.expand-parent-entity-set": (
+                    "EmpCompensation"
+                ),
                 "valid-replication-keys": [],
                 "forced-replication-method": "FULL_TABLE",
             },

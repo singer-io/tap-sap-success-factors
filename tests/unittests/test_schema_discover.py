@@ -376,7 +376,7 @@ class TestBlockedExpandNavProperties(unittest.TestCase):
             stream_root, "wf_pending_action must be discovered"
         )
         self.assertNotIn(
-            "expand-nav-property",
+            "tap-sap-success-factors.expand-nav-property",
             stream_root,
             "wfRequestNav must not be selected as expand-nav-property",
         )

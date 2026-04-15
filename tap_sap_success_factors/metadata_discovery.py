@@ -15,7 +15,12 @@ LOGGER = singer.get_logger()
 # tap continues to work if SAP ever changes the URI across API versions.
 SAP_DATA_NS = "{http://www.successfactors.com/edm/sap}"
 
-# ---------------------------------------------------------------------------
+# Namespace prefix for all tap-specific root-level Singer metadata keys.
+# Stitch and other Singer targets reject unknown root metadata keys unless
+# they are escaped with a dot (.). So we are maintaining a specific format
+MDATA_NS = "tap-sap-success-factors"
+
+# ----------------------------------------------------------------
 # Group 4: Known parent-child relationships that EDMX inference misses.
 # Keyed by snake_case stream name.
 # ---------------------------------------------------------------------------
@@ -787,23 +792,34 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
             replication_method=replication_method,
         )
         mdata = metadata.to_map(mdata)
-        mdata = metadata.write(mdata, (), "entity-set", set_name)
+        mdata = metadata.write(
+            mdata, (), f"{MDATA_NS}.entity-set", set_name
+        )
         if parent_stream:
             mdata = metadata.write(
-                mdata,
-                (),
-                "parent-tap-stream-id",
-                parent_stream,
+                mdata, (), "parent-tap-stream-id", parent_stream,
             )
-            mdata = metadata.write(mdata, (), "parent-filter-field", parent_filter_field)
-            mdata = metadata.write(mdata, (), "parent-key-field", parent_key_field)
+            mdata = metadata.write(
+                mdata, (),
+                f"{MDATA_NS}.parent-filter-field",
+                parent_filter_field,
+            )
+            mdata = metadata.write(
+                mdata, (),
+                f"{MDATA_NS}.parent-key-field",
+                parent_key_field,
+            )
             if parent_secondary_filter_field:
                 mdata = metadata.write(
-                    mdata, (), "parent-secondary-filter-field", parent_secondary_filter_field
+                    mdata, (),
+                    f"{MDATA_NS}.parent-secondary-filter-field",
+                    parent_secondary_filter_field,
                 )
             if parent_secondary_key_field:
                 mdata = metadata.write(
-                    mdata, (), "parent-secondary-key-field", parent_secondary_key_field
+                    mdata, (),
+                    f"{MDATA_NS}.parent-secondary-key-field",
+                    parent_secondary_key_field,
                 )
 
         # ------------------------------------------------------------------
@@ -837,11 +853,13 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
 
         if expand_info:
             mdata = metadata.write(
-                mdata, (), "expand-nav-property",
+                mdata, (),
+                f"{MDATA_NS}.expand-nav-property",
                 expand_info["expand-nav-property"],
             )
             mdata = metadata.write(
-                mdata, (), "expand-parent-entity-set",
+                mdata, (),
+                f"{MDATA_NS}.expand-parent-entity-set",
                 expand_info["expand-parent-entity-set"],
             )
             LOGGER.info(
