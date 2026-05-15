@@ -11,8 +11,8 @@ setup(
     classifiers=["Programming Language :: Python :: 3 :: Only"],
     py_modules=["tap_sap_success_factors"],
     install_requires=[
-        "singer-python==6.3.0",
-        "requests==2.32.5",
+        "singer-python==6.8.0",
+        "requests==2.33.1",
         "backoff==2.2.1",
         "python-dateutil==2.9.0.post0",
     ],
