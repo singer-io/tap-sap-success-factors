@@ -375,6 +375,8 @@ def probe_all_streams(
 
     # ------------------------------------------------------------------
     # Propagate exclusions to expand-only children.
+    # A second cascade (below) handles regular child streams whose parent
+    # was excluded — they cannot be synced without parent keys.
     #
     # An expand-only stream is synced by querying its expand_parent_entity_set
     # via OData $expand.  If the parent entity set's probe returned HTTP 400
@@ -416,5 +418,51 @@ def probe_all_streams(
             len(cascade_excluded),
         )
         excluded |= cascade_excluded
+
+    # ------------------------------------------------------------------
+    # Cascade exclusions to child streams whose parent was excluded.
+    #
+    # A child stream is synced by first fetching parent keys and then
+    # querying the child with $filter=<parent_filter_field> eq '<key>'.
+    # If the parent stream was excluded (HTTP 4xx/5xx during probe), no
+    # parent keys will ever be available, so the child is also unsyncable
+    # and must be excluded to avoid a dangling parent-tap-stream-id reference
+    # in the catalog.
+    #
+    # The loop repeats until no new exclusions are found so that multi-level
+    # chains (grandparent → child → grandchild) are fully propagated:
+    #   Round 1: grandparent excluded → child cascade-excluded
+    #   Round 2: child now excluded  → grandchild cascade-excluded
+    #
+    # Example (single-level):
+    #   mdf_enum_value    → HTTP 400 (excluded by probe)
+    #   external_allowance has parent_stream='mdf_enum_value'
+    #   → sync would find no parent keys → must also be excluded.
+    # ------------------------------------------------------------------
+    child_cascade_excluded: Set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for stream_name, stream_def in stream_defs.items():
+            parent_stream = stream_def.get("parent_stream")
+            if not parent_stream:
+                continue
+            if parent_stream in excluded and stream_name not in excluded:
+                LOGGER.warning(
+                    "[Probe] Excluding child stream '%s' — its parent stream "
+                    "'%s' was excluded (HTTP 4xx/5xx), no parent keys available.",
+                    stream_name,
+                    parent_stream,
+                )
+                child_cascade_excluded.add(stream_name)
+                excluded.add(stream_name)
+                changed = True
+
+    if child_cascade_excluded:
+        LOGGER.info(
+            "[Probe] Cascade-excluded %d child streams "
+            "whose parent stream was excluded (HTTP 4xx/5xx).",
+            len(child_cascade_excluded),
+        )
 
     return excluded

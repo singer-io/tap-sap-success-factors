@@ -638,6 +638,253 @@ class TestProbeAllStreams(unittest.TestCase):
         )
         self.assertNotIn("currency", excluded)
 
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_child_cascade_excluded_when_parent_excluded(self, mock_probe):
+        """Child streams whose parent_stream was excluded are also excluded.
+
+        Real example:
+          mdf_enum_value   → HTTP 400 (probed directly, excluded)
+          external_allowance → parent_stream='mdf_enum_value'
+          → sync would find no parent keys → must also be excluded.
+        """
+        mock_probe.side_effect = (
+            lambda auth, base, name, path, extra_params=None: {
+                "stream": name,
+                "status": 400 if name == "mdf_enum_value" else 200,
+                "error": "COE0018" if name == "mdf_enum_value" else None,
+            }
+        )
+        client = _mock_client()
+        stream_defs = {
+            "mdf_enum_value": {
+                "path": "/odata/v2/MdfEnumValue",
+                "entity_set": "MdfEnumValue",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "parent_stream": None,
+                "replication_keys": [],
+            },
+            "external_allowance": {
+                "path": "/odata/v2/ExternalAllowance",
+                "entity_set": "ExternalAllowance",
+                "parent_filter_field": "value",
+                "parent_filter_field_schema": {"type": ["null", "string"]},
+                "expand_parent_entity_set": None,
+                "parent_stream": "mdf_enum_value",
+                "replication_keys": [],
+            },
+            "currency": {
+                "path": "/odata/v2/Currency",
+                "entity_set": "Currency",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "parent_stream": None,
+                "replication_keys": [],
+            },
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertIn(
+            "mdf_enum_value", excluded,
+            "Direct 400 parent must be excluded",
+        )
+        self.assertIn(
+            "external_allowance", excluded,
+            "Child of excluded parent must be cascade-excluded",
+        )
+        self.assertNotIn("currency", excluded)
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_child_cascade_not_triggered_when_parent_ok(self, mock_probe):
+        """Child streams are NOT cascade-excluded when their parent probes OK."""
+        mock_probe.side_effect = (
+            lambda auth, base, name, path, extra_params=None: {
+                "stream": name,
+                "status": 200,
+                "error": None,
+            }
+        )
+        client = _mock_client()
+        stream_defs = {
+            "onb2_process": {
+                "path": "/odata/v2/ONB2Process",
+                "entity_set": "ONB2Process",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "parent_stream": None,
+                "replication_keys": ["lastModifiedDateTime"],
+            },
+            "onb2_process_responsible": {
+                "path": "/odata/v2/ONB2ProcessResponsible",
+                "entity_set": "ONB2ProcessResponsible",
+                "parent_filter_field": "processId",
+                "parent_filter_field_schema": {"type": ["null", "string"]},
+                "expand_parent_entity_set": None,
+                "parent_stream": "onb2_process",
+                "replication_keys": ["lastModifiedDateTime"],
+            },
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_child_cascade_does_not_double_count_already_excluded_child(self, mock_probe):
+        """A child that is directly excluded (own probe) is not re-logged via cascade.
+
+        When both parent and child are excluded by their own probes, the child
+        must appear in the final excluded set exactly once (no double-counting).
+        """
+        mock_probe.side_effect = (
+            lambda auth, base, name, path, extra_params=None: {
+                "stream": name,
+                "status": 403,
+                "error": "Forbidden",
+            }
+        )
+        client = _mock_client()
+        stream_defs = {
+            "calibration_session": {
+                "path": "/odata/v2/CalibrationSession",
+                "entity_set": "CalibrationSession",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "parent_stream": None,
+                "replication_keys": [],
+            },
+            "calibration_session_reviewer": {
+                "path": "/odata/v2/CalibrationSessionReviewer",
+                "entity_set": "CalibrationSessionReviewer",
+                "parent_filter_field": "sessionId",
+                "parent_filter_field_schema": {"type": ["null", "string"]},
+                "expand_parent_entity_set": None,
+                "parent_stream": "calibration_session",
+                "replication_keys": [],
+            },
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertIn("calibration_session", excluded)
+        self.assertIn("calibration_session_reviewer", excluded)
+        # set membership gives us uniqueness; just assert both are present
+        self.assertEqual(
+            excluded,
+            {"calibration_session", "calibration_session_reviewer"},
+        )
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_child_cascade_multi_level_grandchild(self, mock_probe):
+        """Cascade propagates through multiple levels (grandchild also excluded).
+
+        grandparent → HTTP 400 (excluded)
+        child       → parent_stream='grandparent' → cascade-excluded
+        grandchild  → parent_stream='child' → cascade-excluded (second pass)
+        """
+        mock_probe.side_effect = (
+            lambda auth, base, name, path, extra_params=None: {
+                "stream": name,
+                "status": 400 if name == "grandparent" else 200,
+                "error": "COE0018" if name == "grandparent" else None,
+            }
+        )
+        client = _mock_client()
+        stream_defs = {
+            "grandparent": {
+                "path": "/odata/v2/Grandparent",
+                "entity_set": "Grandparent",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "parent_stream": None,
+                "replication_keys": [],
+            },
+            "child": {
+                "path": "/odata/v2/Child",
+                "entity_set": "Child",
+                "parent_filter_field": "grandparentId",
+                "parent_filter_field_schema": {"type": ["null", "string"]},
+                "expand_parent_entity_set": None,
+                "parent_stream": "grandparent",
+                "replication_keys": [],
+            },
+            "grandchild": {
+                "path": "/odata/v2/Grandchild",
+                "entity_set": "Grandchild",
+                "parent_filter_field": "childId",
+                "parent_filter_field_schema": {"type": ["null", "string"]},
+                "expand_parent_entity_set": None,
+                "parent_stream": "child",
+                "replication_keys": [],
+            },
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertIn("grandparent", excluded)
+        self.assertIn("child", excluded)
+        self.assertIn("grandchild", excluded)
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_child_cascade_five_levels_deep(self, mock_probe):
+        """Cascade propagates through 5 levels; only the root returns HTTP 400.
+
+        Chain (modelled on real ONB2 / EmpJob hierarchy depth in SAP SF):
+          level_1  → HTTP 400 (directly excluded by probe)
+          level_2  → parent_stream='level_1'  → cascade round 1
+          level_3  → parent_stream='level_2'  → cascade round 2
+          level_4  → parent_stream='level_3'  → cascade round 3
+          level_5  → parent_stream='level_4'  → cascade round 4
+
+        All five levels must be in the excluded set.
+        An unrelated 'independent_stream' (HTTP 200, no parent) must NOT be.
+        """
+        mock_probe.side_effect = (
+            lambda auth, base, name, path, extra_params=None: {
+                "stream": name,
+                "status": 400 if name == "level_1" else 200,
+                "error": "COE0018" if name == "level_1" else None,
+            }
+        )
+        client = _mock_client()
+
+        def _def(name, parent):
+            return {
+                "path": f"/odata/v2/{name.title().replace('_', '')}",
+                "entity_set": name.title().replace("_", ""),
+                "parent_filter_field": f"{parent}Id" if parent else None,
+                "parent_filter_field_schema": (
+                    {"type": ["null", "string"]} if parent else {}
+                ),
+                "expand_parent_entity_set": None,
+                "parent_stream": parent,
+                "replication_keys": [],
+            }
+
+        stream_defs = {
+            "level_1":           _def("level_1",           None),
+            "level_2":           _def("level_2",           "level_1"),
+            "level_3":           _def("level_3",           "level_2"),
+            "level_4":           _def("level_4",           "level_3"),
+            "level_5":           _def("level_5",           "level_4"),
+            "independent_stream": _def("independent_stream", None),
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        for level in ("level_1", "level_2", "level_3", "level_4", "level_5"):
+            self.assertIn(level, excluded, f"{level} must be cascade-excluded")
+        self.assertNotIn(
+            "independent_stream", excluded,
+            "Unrelated stream must not be excluded",
+        )
+
 # ---------------------------------------------------------------------------
 # Constants sanity
 # ---------------------------------------------------------------------------
