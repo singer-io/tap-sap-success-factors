@@ -2756,6 +2756,14 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
             },
+            "job_classification_usa_state_detail": {
+                cls.PRIMARY_KEYS: {"JobClassificationCountry_country", "JobClassificationUSA_externalCode",
+                                   "JobClassification_effectiveStartDate", "JobClassification_externalCode",
+                                   "externalCode"},
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
+                cls.OBEYS_START_DATE: True,
+            },
 
         }
 
@@ -3346,5 +3354,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             "work_schedule_day_model_segment",
             "work_schedule_day_model_variant_assignment",
             "work_schedule_day_model_variant_identifier",
+            "job_classification_usa_state_detail"
 
         }
