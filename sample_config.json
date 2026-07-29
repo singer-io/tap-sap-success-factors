@@ -1,0 +1,9 @@
+{
+    "client_id": "your_client_id",
+    "user_id": "your_user_id",
+    "company_id": "your_company_id",
+    "api_server": "api_server_url",
+    "username": "your_username",
+    "password": "your_password",
+    "start_date": "2024-01-01T00:00:00Z"
+}
