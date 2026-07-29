@@ -12,7 +12,7 @@ setup(
     py_modules=["tap_sap_success_factors"],
     install_requires=[
         "singer-python==6.8.0",
-        "requests==2.33.1",
+        "requests==2.34.2",
         "backoff==2.2.1",
         "python-dateutil==2.9.0.post0",
     ],
