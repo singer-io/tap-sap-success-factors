@@ -2,7 +2,7 @@ import base64
 import unittest
 from unittest.mock import Mock
 
-from tap_sap_success_factors.client import SAPSuccessFactorsClient
+from tap_sap_success_factors.client import SAPSuccessFactorsClient, validate_api_server
 from tap_sap_success_factors.exceptions import SAPSuccessFactorsError
 
 
@@ -26,11 +26,32 @@ class DummyResponse:
 
 class TestBasicAuth(unittest.TestCase):
 
+    def test_accepts_success_factors_api_server(self):
+        for api_server in (
+            "https://api4.successfactors.com",
+            "https://api17preview.sapsf.com/",
+            "https://api12.sapsf.eu",
+        ):
+            validate_api_server(api_server)
+
+    def test_rejects_non_success_factors_api_server(self):
+        for api_server in (
+            "http://api4.successfactors.com",
+            "https://evil.example",
+            "https://api4.successfactors.com.evil.example",
+            "https://-api4.successfactors.com",
+            "https://api4-.successfactors.com",
+            "https://api4.successfactors.com/path",
+            "https://api4.successfactors.com:443",
+        ):
+            with self.assertRaises(ValueError):
+                validate_api_server(api_server)
+
     def test_header_is_set_on_construction(self):
         """When username+password are supplied the client stores a Basic header."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "test_username",
                 "password": "not_a_real_password",
@@ -45,7 +66,7 @@ class TestBasicAuth(unittest.TestCase):
         """refresh_access_token must be a no-op when basic auth is configured."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "test_username",
                 "password": "not_a_real_password",
@@ -59,7 +80,7 @@ class TestBasicAuth(unittest.TestCase):
         """get_auth_header() must return the Basic header, not a Bearer token."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
                 "password": "not_a_real_password",
@@ -73,7 +94,7 @@ class TestBasicAuth(unittest.TestCase):
         """When both username/password and access_token are present, Basic auth wins."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
                 "password": "not_a_real_password",
@@ -86,7 +107,7 @@ class TestBasicAuth(unittest.TestCase):
         """authenticate() must set Authorization: Basic ... on the headers dict."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
                 "password": "not_a_real_password",
@@ -107,7 +128,7 @@ class TestOAuthAndStaticToken(unittest.TestCase):
         """get_auth_header() must return Bearer <token> when access_token is configured."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "access_token": "my_static_token",
             }
@@ -118,7 +139,7 @@ class TestOAuthAndStaticToken(unittest.TestCase):
         """get_auth_header() must return Bearer <token> after a successful OAuth exchange."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "client_id": "cid",
                 "saml_assertion": "assertion",
@@ -134,7 +155,7 @@ class TestOAuthAndStaticToken(unittest.TestCase):
     def test_refresh_access_token_with_static_token(self):
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "access_token": "static",
             }
@@ -145,7 +166,7 @@ class TestOAuthAndStaticToken(unittest.TestCase):
     def test_refresh_access_token_oauth_flow_success(self):
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "client_id": "cid",
                 "saml_assertion": "assertion",
@@ -163,7 +184,7 @@ class TestOAuthAndStaticToken(unittest.TestCase):
         """When no credentials are supplied the OAuth POST fails and SAPSuccessFactorsError is raised."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
             }
         )
@@ -178,7 +199,7 @@ class TestOAuthAndStaticToken(unittest.TestCase):
     def test_refresh_access_token_missing_access_token_in_response(self):
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "client_id": "cid",
                 "saml_assertion": "assertion",

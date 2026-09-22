@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping, Optional, Tuple
 
@@ -17,6 +18,18 @@ from tap_sap_success_factors.exceptions import (
 
 LOGGER = get_logger()
 REQUEST_TIMEOUT = 300
+API_SERVER_PATTERN = re.compile(
+    r"^https://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.(successfactors|sapsf)\.(com|eu)/?$"
+)
+
+
+def validate_api_server(api_server: str) -> None:
+    """Reject API servers outside the SAP SuccessFactors domains."""
+    if not isinstance(api_server, str) or not API_SERVER_PATTERN.fullmatch(api_server):
+        raise ValueError(
+            "api_server must be an HTTPS SAP SuccessFactors URL ending in "
+            ".successfactors.com, .successfactors.eu, .sapsf.com, or .sapsf.eu"
+        )
 
 
 def _get_retry_after(exc) -> int:
@@ -83,6 +96,7 @@ class SAPSuccessFactorsClient:
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         self.config = dict(config)
+        validate_api_server(self.config["api_server"])
         self._session = session()
         self.base_url = self.config["api_server"].rstrip("/")
         self.odata_path = self.config.get("odata_path", "/odata/v2")
