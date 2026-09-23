@@ -5,6 +5,8 @@ from singer import get_logger
 
 LOGGER = get_logger()
 
+SAML_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:saml2-bearer"
+
 
 def build_basic_auth_header(config: Dict) -> Optional[str]:
     """Return a ``Basic <base64>`` authorization header value when the config
@@ -23,7 +25,7 @@ def build_basic_auth_header(config: Dict) -> Optional[str]:
     return None
 
 
-def build_token_request(config: Dict) -> Dict:
+def build_saml_token_request(config: Dict, saml_assertion) -> Dict:
     """Build OAuth token request payload.
 
     Supported modes:
@@ -36,8 +38,8 @@ def build_token_request(config: Dict) -> Dict:
     payload = {
         "client_id": config.get("client_id"),
         "company_id": config.get("company_id"),
-        "grant_type": "urn:ietf:params:oauth:grant-type:saml2-bearer",
-        "assertion": config.get("assertion") or config.get("saml_assertion"),
+        "grant_type": SAML_BEARER_GRANT_TYPE,
+        "assertion": saml_assertion,
     }
 
     if config.get("refresh_token"):

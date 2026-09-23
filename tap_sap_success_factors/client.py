@@ -10,13 +10,15 @@ from requests.exceptions import Timeout
 from singer import get_logger, metrics
 
 from tap_sap_success_factors.auth import (build_basic_auth_header,
-                                          build_token_request)
+                                          build_saml_token_request)
 from tap_sap_success_factors.exceptions import (
     ERROR_CODE_EXCEPTION_MAPPING, SAPSuccessFactorsError,
     SAPSuccessFactorsRateLimitError, SAPSuccessFactorsServer5xxError)
+from tap_sap_success_factors.saml_assertion import AssertionStrategyFactory
 
 LOGGER = get_logger()
 REQUEST_TIMEOUT = 300
+AUTH_METHOD_BASIC = "basic_auth"
 
 
 def _get_retry_after(exc) -> int:
@@ -87,9 +89,25 @@ class SAPSuccessFactorsClient:
         self.base_url = self.config["api_server"].rstrip("/")
         self.odata_path = self.config.get("odata_path", "/odata/v2")
         self._access_token = self.config.get("access_token")
+        self._auth_method = self.config.get("auth_method")
         self._expires_at = None
-        # Computed once at construction; None when not in basic-auth mode.
-        self._basic_auth_header = build_basic_auth_header(config)
+        self._basic_auth_header = None
+        self._saml_assertion_factory = None
+
+        if self._auth_method == AUTH_METHOD_BASIC:
+            self._basic_auth_header = build_basic_auth_header(self.config)
+            if not self._basic_auth_header:
+                raise SAPSuccessFactorsError(
+                    "auth_method is 'basic_auth' but 'username'/'password' are missing from config."
+                )
+        elif not self._auth_method:
+            # No auth_method configured — infer Basic auth from credentials (back-compat).
+            self._basic_auth_header = build_basic_auth_header(self.config)
+
+        if not self._basic_auth_header and not self._access_token:
+            # OAuth / SAML-bearer mode — resolve the strategy now so an
+            # unknown auth_method fails fast, at construction time.
+            self._saml_assertion_factory = AssertionStrategyFactory.create(self.config, self._auth_method)
 
         config_request_timeout = self.config.get("request_timeout")
         self.request_timeout = (
@@ -118,7 +136,8 @@ class SAPSuccessFactorsClient:
             self._access_token = self.config["access_token"]
             return
 
-        payload = build_token_request(self.config)
+        LOGGER.info("Refreshing access token using auth method: %s", self._auth_method)
+        payload = build_saml_token_request(self.config, self._saml_assertion_factory.generate_assertion())
         token_url = self.base_url + "/oauth/token"
 
         response = self._session.post(
@@ -134,7 +153,10 @@ class SAPSuccessFactorsClient:
         if not self._access_token:
             raise SAPSuccessFactorsError("OAuth response did not include access_token")
 
-        expires_in_seconds = int(response_json.get("expires_in", 3600))
+        LOGGER.info("Obtained new access token")
+
+        # Set token expiration time and pad a 60 seconds buffer to avoid using an expired token
+        expires_in_seconds = int(response_json.get("expires_in", 3600)) - 60
         self._expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in_seconds)
 
     def get_access_token(self) -> Optional[str]:

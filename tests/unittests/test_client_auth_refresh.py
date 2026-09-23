@@ -1,14 +1,14 @@
 import base64
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tap_sap_success_factors.client import SAPSuccessFactorsClient
 from tap_sap_success_factors.exceptions import SAPSuccessFactorsError
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
 
 class DummyResponse:
     def __init__(self, status_code=200, payload=None, headers=None):
@@ -90,11 +90,52 @@ class TestBasicAuth(unittest.TestCase):
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
                 "password": "not_a_real_password",
+                "auth_method": "basic_auth"
             }
         )
         headers, params = client.authenticate({}, {})
         self.assertTrue(headers["Authorization"].startswith("Basic "))
         self.assertEqual(params["$format"], "json")
+
+    def test_explicit_auth_method_basic_auth_works(self):
+        """auth_method='basic_auth' with credentials builds the Basic header."""
+        client = SAPSuccessFactorsClient(
+            {
+                "api_server": "https://example.com",
+                "start_date": "2024-01-01T00:00:00Z",
+                "auth_method": "basic_auth",
+                "username": "user",
+                "password": "not_a_real_password",
+            }
+        )
+        self.assertTrue(client.get_auth_header().startswith("Basic "))
+
+    def test_explicit_auth_method_basic_auth_without_credentials_raises(self):
+        """auth_method='basic_auth' without username/password fails fast at construction."""
+        with self.assertRaises(SAPSuccessFactorsError):
+            SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://example.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "basic_auth",
+                }
+            )
+
+    def test_explicit_non_basic_auth_method_ignores_credentials(self):
+        """An explicit non-basic auth_method must use OAuth even if username/password are present."""
+        with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
+            mock_factory.create.return_value.generate_assertion.return_value = "assertion"
+            client = SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://example.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "saml_bearer_oauth",
+                    "username": "user",
+                    "password": "not_a_real_password",
+                }
+            )
+        self.assertIsNone(client._basic_auth_header)
+        mock_factory.create.assert_called_once_with(client.config, "saml_bearer_oauth")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +143,12 @@ class TestBasicAuth(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestOAuthAndStaticToken(unittest.TestCase):
+
+    def setUp(self):
+        patcher = patch("tap_sap_success_factors.client.AssertionStrategyFactory")
+        mock_factory = patcher.start()
+        mock_factory.create.return_value.generate_assertion.return_value = "assertion"
+        self.addCleanup(patcher.stop)
 
     def test_get_auth_header_returns_bearer_for_static_token(self):
         """get_auth_header() must return Bearer <token> when access_token is configured."""

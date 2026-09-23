@@ -1,12 +1,13 @@
 import base64
 import unittest
 
-from tap_sap_success_factors.auth import build_basic_auth_header, build_token_request
-
+from tap_sap_success_factors.auth import (build_basic_auth_header,
+                                          build_saml_token_request)
 
 # ---------------------------------------------------------------------------
 # build_basic_auth_header
 # ---------------------------------------------------------------------------
+
 
 class TestBuildBasicAuthHeader(unittest.TestCase):
 
@@ -45,32 +46,32 @@ class TestBuildBasicAuthHeader(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# build_token_request
+# build_saml_token_request
 # ---------------------------------------------------------------------------
 
 class TestBuildTokenRequest(unittest.TestCase):
 
     def test_access_token_mode(self):
-        self.assertEqual(build_token_request({"access_token": "abc"}), {})
+        self.assertEqual(build_saml_token_request({"access_token": "abc"}, None), {})
 
     def test_saml_mode(self):
-        payload = build_token_request(
+        payload = build_saml_token_request(
             {
                 "client_id": "cid",
                 "company_id": "co",
-                "grant_type": "urn:ietf:params:oauth:grant-type:saml2-bearer",
-                "saml_assertion": "assertion",
-            }
+            },
+            "assertion",
         )
         self.assertEqual(payload["client_id"], "cid")
         self.assertEqual(payload["assertion"], "assertion")
 
     def test_refresh_token_mode(self):
-        payload = build_token_request(
+        payload = build_saml_token_request(
             {
                 "client_id": "cid",
                 "refresh_token": "refresh",
-            }
+            },
+            None,
         )
         self.assertEqual(
             payload,
