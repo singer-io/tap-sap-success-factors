@@ -15,6 +15,8 @@ setup(
         "requests==2.34.2",
         "backoff==2.2.1",
         "python-dateutil==2.9.0.post0",
+        "lxml==6.1.3",
+        "signxml==5.1.0"
     ],
     entry_points="""
           [console_scripts]

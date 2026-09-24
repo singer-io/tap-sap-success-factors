@@ -51,3 +51,53 @@ class TestMain(unittest.TestCase):
                 with patch("tap_sap_success_factors.sync") as sync_patch:
                     tap_sap_success_factors.main()
                     sync_patch.assert_called_once()
+
+
+class TestValidateAuthConfig(unittest.TestCase):
+
+    def test_basic_auth_method_requires_username_password(self):
+        with self.assertRaises(Exception):
+            tap_sap_success_factors._validate_auth_config(
+                {"auth_method": "basic_auth", "username": "user"}
+            )
+
+    def test_basic_auth_method_with_credentials_passes(self):
+        tap_sap_success_factors._validate_auth_config(
+            {"auth_method": "basic_auth", "username": "user", "password": "pw"}
+        )
+
+    def test_saml_bearer_auth_method_requires_all_keys(self):
+        with self.assertRaises(Exception):
+            tap_sap_success_factors._validate_auth_config(
+                {"auth_method": "saml_bearer_oauth", "client_id": "cid"}
+            )
+
+    def test_saml_bearer_auth_method_with_all_keys_passes(self):
+        tap_sap_success_factors._validate_auth_config(
+            {
+                "auth_method": "saml_bearer_oauth",
+                "client_id": "cid",
+                "user_id": "uid",
+                "company_id": "co",
+                "private_key": "key",
+            }
+        )
+
+    def test_legacy_config_infers_basic_auth(self):
+        tap_sap_success_factors._validate_auth_config(
+            {"username": "user", "password": "pw"}
+        )
+
+    def test_legacy_config_infers_saml_bearer(self):
+        tap_sap_success_factors._validate_auth_config(
+            {
+                "client_id": "cid",
+                "user_id": "uid",
+                "company_id": "co",
+                "private_key": "key",
+            }
+        )
+
+    def test_legacy_config_with_neither_complete_set_raises(self):
+        with self.assertRaises(Exception):
+            tap_sap_success_factors._validate_auth_config({"client_id": "cid"})
