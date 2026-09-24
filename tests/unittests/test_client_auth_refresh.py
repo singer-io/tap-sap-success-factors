@@ -29,8 +29,11 @@ class TestBasicAuth(unittest.TestCase):
     def test_accepts_success_factors_api_server(self):
         for api_server in (
             "https://api4.successfactors.com",
+            "https://sales.api4.successfactors.eu",
             "https://api17preview.sapsf.com/",
             "https://api12.sapsf.eu",
+            "https://api12.sapsf.cn:443",
+            "https://api.hr.cloud.sap",
         ):
             validate_api_server(api_server)
 
@@ -42,7 +45,9 @@ class TestBasicAuth(unittest.TestCase):
             "https://-api4.successfactors.com",
             "https://api4-.successfactors.com",
             "https://api4.successfactors.com/path",
-            "https://api4.successfactors.com:443",
+            "https://api4.successfactors.com:444",
+            "https://successfactors.com",
+            "https://api.hr.cloud.sap.evil.example",
         ):
             with self.assertRaises(ValueError):
                 validate_api_server(api_server)
@@ -164,6 +169,20 @@ class TestBasicAuth(unittest.TestCase):
         )
 
         self.assertFalse(client._session.request.call_args.kwargs["allow_redirects"])
+
+    def test_request_allows_equivalent_https_port(self):
+        client = SAPSuccessFactorsClient(
+            {
+                "api_server": "https://api4.successfactors.com:443",
+                "access_token": "static",
+            }
+        )
+        client._session = Mock()
+        client._session.request.return_value = DummyResponse()
+
+        client.request_raw("GET", "https://api4.successfactors.com/odata/v2/User")
+
+        client._session.request.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

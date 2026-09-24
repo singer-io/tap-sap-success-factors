@@ -20,7 +20,8 @@ from tap_sap_success_factors.exceptions import (
 LOGGER = get_logger()
 REQUEST_TIMEOUT = 300
 API_SERVER_PATTERN = re.compile(
-    r"^https://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.(successfactors|sapsf)\.(com|eu)/?$"
+    r"^https://([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+"
+    r"(successfactors\.(com|eu)|sapsf\.(com|eu|cn)|hr\.cloud\.sap)(:443)?/?$"
 )
 
 
@@ -28,8 +29,7 @@ def validate_api_server(api_server: str) -> None:
     """Reject API servers outside the SAP SuccessFactors domains."""
     if not isinstance(api_server, str) or not API_SERVER_PATTERN.fullmatch(api_server):
         raise ValueError(
-            "api_server must be an HTTPS SAP SuccessFactors URL ending in "
-            ".successfactors.com, .successfactors.eu, .sapsf.com, or .sapsf.eu"
+            "api_server must be an approved HTTPS SAP SuccessFactors URL"
         )
 
 
@@ -198,12 +198,14 @@ class SAPSuccessFactorsClient:
         """Reject request destinations outside the configured API origin."""
         configured = urlsplit(self.base_url)
         requested = urlsplit(endpoint)
+        configured_port = configured.port or 443
+        requested_port = requested.port or 443
         if (
             requested.username is not None
             or requested.password is not None
             or requested.scheme != configured.scheme
             or requested.hostname != configured.hostname
-            or requested.port != configured.port
+            or requested_port != configured_port
         ):
             raise ValueError("Request endpoint must use the configured API server origin")
 
