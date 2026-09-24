@@ -87,6 +87,9 @@ class BaseStream(ABC):
         """Build OData query params for stream fetch."""
         params: Dict[str, Any] = {}
 
+        if self.key_properties and not self.expand_nav_property:
+            params["$orderby"] = ",".join(self.key_properties)
+
         if self.replication_method == "INCREMENTAL" and self.replication_keys:
             key = self.replication_keys[0]
             bookmark = self.effective_bookmark or self.get_bookmark(
