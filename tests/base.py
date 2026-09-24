@@ -1753,6 +1753,18 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
             },
+            "job_classification_rou": {
+                cls.PRIMARY_KEYS: {"JobClassificationCountry_country", "JobClassification_effectiveStartDate", "JobClassification_externalCode", "externalCode"},
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
+                cls.OBEYS_START_DATE: True,
+            },
+            "job_classification_ukr": {
+                cls.PRIMARY_KEYS: {"JobClassificationCountry_country", "JobClassification_effectiveStartDate", "JobClassification_externalCode", "externalCode"},
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
+                cls.OBEYS_START_DATE: True,
+            },
             "job_classification_usa": {
                 cls.PRIMARY_KEYS: {"JobClassificationCountry_country", "JobClassification_effectiveStartDate", "JobClassification_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
@@ -1935,6 +1947,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             },
             "legal_entity_usa": {
                 cls.PRIMARY_KEYS: {"LegalEntity_effectiveStartDate", "LegalEntity_externalCode", "externalCode"},
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
+                cls.OBEYS_START_DATE: True,
+            },
+            "marketing_brand": {
+                cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
@@ -2469,6 +2487,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             },
             "position_matrix_relationship": {
                 cls.PRIMARY_KEYS: {"Position_code", "Position_effectiveStartDate", "matrixRelationshipType"},
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
+                cls.OBEYS_START_DATE: True,
+            },
+            "professions_classifier_ukr": {
+                cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,

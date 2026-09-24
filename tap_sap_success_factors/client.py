@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping, Optional, Tuple
+from urllib.parse import urlsplit
 
 import backoff
 import requests
@@ -140,6 +141,7 @@ class SAPSuccessFactorsClient:
             data=payload,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=self.request_timeout,
+            allow_redirects=False,
         )
         raise_for_error(response)
 
@@ -192,6 +194,19 @@ class SAPSuccessFactorsClient:
         """Perform raw request without json parsing."""
         return self._make_request(method, endpoint, parse_json=False, **kwargs)
 
+    def _validate_request_endpoint(self, endpoint: str) -> None:
+        """Reject request destinations outside the configured API origin."""
+        configured = urlsplit(self.base_url)
+        requested = urlsplit(endpoint)
+        if (
+            requested.username is not None
+            or requested.password is not None
+            or requested.scheme != configured.scheme
+            or requested.hostname != configured.hostname
+            or requested.port != configured.port
+        ):
+            raise ValueError("Request endpoint must use the configured API server origin")
+
     @backoff.on_exception(
         wait_gen=backoff.runtime,
         exception=SAPSuccessFactorsRateLimitError,
@@ -218,7 +233,9 @@ class SAPSuccessFactorsClient:
         **kwargs,
     ) -> Optional[Mapping[Any, Any]]:
         """Perform HTTP request; backoff decorators handle retries."""
+        self._validate_request_endpoint(endpoint)
         kwargs.setdefault("timeout", self.request_timeout)
+        kwargs.setdefault("allow_redirects", False)
         with metrics.http_request_timer(endpoint):
             response = self._session.request(method, endpoint, **kwargs)
         raise_for_error(response)

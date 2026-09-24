@@ -47,6 +47,15 @@ class TestBasicAuth(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_api_server(api_server)
 
+    def test_client_rejects_invalid_api_server(self):
+        with self.assertRaises(ValueError):
+            SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://evil.example",
+                    "access_token": "must_not_be_used",
+                }
+            )
+
     def test_header_is_set_on_construction(self):
         """When username+password are supplied the client stores a Basic header."""
         client = SAPSuccessFactorsClient(
@@ -116,6 +125,44 @@ class TestBasicAuth(unittest.TestCase):
         headers, params = client.authenticate({}, {})
         self.assertTrue(headers["Authorization"].startswith("Basic "))
         self.assertEqual(params["$format"], "json")
+
+    def test_request_raw_rejects_cross_origin_endpoint(self):
+        client = SAPSuccessFactorsClient(
+            {
+                "api_server": "https://api4.successfactors.com",
+                "username": "user",
+                "password": "not_a_real_password",
+            }
+        )
+        client._session = Mock()
+
+        with self.assertRaises(ValueError):
+            client.request_raw(
+                "GET",
+                "https://evil.example/odata/v2/PerPerson?$skiptoken=secret",
+                headers={"Authorization": client.get_auth_header()},
+            )
+
+        client._session.request.assert_not_called()
+
+    def test_requests_disable_redirects(self):
+        client = SAPSuccessFactorsClient(
+            {
+                "api_server": "https://api4.successfactors.com",
+                "username": "user",
+                "password": "not_a_real_password",
+            }
+        )
+        client._session = Mock()
+        client._session.request.return_value = DummyResponse()
+
+        client.request_raw(
+            "GET",
+            "https://api4.successfactors.com/odata/v2/PerPerson",
+            headers={"Authorization": client.get_auth_header()},
+        )
+
+        self.assertFalse(client._session.request.call_args.kwargs["allow_redirects"])
 
 
 # ---------------------------------------------------------------------------
