@@ -70,6 +70,7 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         client = Mock()
         client.config = {"start_date": "2024-01-01T00:00:00Z"}
         stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.sortable_key_properties = ["personIdExternal"]
 
         params = stream.build_params(state={})
 
@@ -80,6 +81,7 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         client.config = {"start_date": "2024-01-01T00:00:00Z"}
         stream = DynamicStream(client=client, catalog=FakeCatalog())
         stream.key_properties = ["roleId", "permissionId"]
+        stream.sortable_key_properties = ["roleId", "permissionId"]
 
         params = stream.build_params(state={})
 
@@ -90,6 +92,16 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         client.config = {"start_date": "2024-01-01T00:00:00Z"}
         stream = DynamicStream(client=client, catalog=FakeCatalog())
         stream.expand_nav_property = "permissionsNav"
+        stream.sortable_key_properties = ["personIdExternal"]
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$orderby", params)
+
+    def test_primary_key_ordering_not_added_for_unsortable_key(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
 
         params = stream.build_params(state={})
 

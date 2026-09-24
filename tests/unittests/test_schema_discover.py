@@ -59,6 +59,26 @@ class TestDynamicDiscovery(unittest.TestCase):
         stream_names = {stream.stream for stream in catalog.streams}
         self.assertIn("calibration_template", stream_names)
 
+    def test_emits_only_sortable_primary_keys(self):
+        metadata_xml = METADATA_XML.replace(
+            '<Property Name="templateId" Type="Edm.String" Nullable="false"/>',
+            '<Property Name="templateId" Type="Edm.String" Nullable="false" '
+            'xmlns:sap="http://www.successfactors.com/edm/sap" '
+            'sap:sortable="false"/>',
+        )
+
+        _, field_metadata, _ = discover_dynamic_streams(_client(metadata_xml))
+        root_metadata = next(
+            item["metadata"]
+            for item in field_metadata["calibration_template"]
+            if item["breadcrumb"] == ()
+        )
+
+        self.assertEqual(
+            root_metadata["tap-sap-success-factors.sortable-key-properties"],
+            [],
+        )
+
 
 class TestAssociationInference(unittest.TestCase):
 
