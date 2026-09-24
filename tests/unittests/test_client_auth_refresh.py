@@ -145,7 +145,7 @@ class TestBasicAuth(unittest.TestCase):
 
         client._session.request.assert_not_called()
 
-    def test_requests_disable_redirects(self):
+    def test_requests_cannot_enable_redirects(self):
         client = SAPSuccessFactorsClient(
             {
                 "api_server": "https://api4.successfactors.com",
@@ -160,6 +160,7 @@ class TestBasicAuth(unittest.TestCase):
             "GET",
             "https://api4.successfactors.com/odata/v2/PerPerson",
             headers={"Authorization": client.get_auth_header()},
+            allow_redirects=True,
         )
 
         self.assertFalse(client._session.request.call_args.kwargs["allow_redirects"])

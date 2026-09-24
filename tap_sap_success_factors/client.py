@@ -235,7 +235,7 @@ class SAPSuccessFactorsClient:
         """Perform HTTP request; backoff decorators handle retries."""
         self._validate_request_endpoint(endpoint)
         kwargs.setdefault("timeout", self.request_timeout)
-        kwargs.setdefault("allow_redirects", False)
+        kwargs["allow_redirects"] = False
         with metrics.http_request_timer(endpoint):
             response = self._session.request(method, endpoint, **kwargs)
         raise_for_error(response)
