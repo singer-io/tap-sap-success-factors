@@ -1,5 +1,7 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping, Optional, Tuple
+from urllib.parse import urlsplit
 
 import backoff
 import requests
@@ -17,6 +19,18 @@ from tap_sap_success_factors.exceptions import (
 
 LOGGER = get_logger()
 REQUEST_TIMEOUT = 300
+API_SERVER_PATTERN = re.compile(
+    r"^https://([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+"
+    r"(successfactors\.(com|eu)|sapsf\.(com|eu|cn)|hr\.cloud\.sap)(:443)?/?$"
+)
+
+
+def validate_api_server(api_server: str) -> None:
+    """Reject API servers outside the SAP SuccessFactors domains."""
+    if not isinstance(api_server, str) or not API_SERVER_PATTERN.fullmatch(api_server):
+        raise ValueError(
+            "api_server must be an approved HTTPS SAP SuccessFactors URL"
+        )
 
 
 def _get_retry_after(exc) -> int:
@@ -83,6 +97,7 @@ class SAPSuccessFactorsClient:
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         self.config = dict(config)
+        validate_api_server(self.config["api_server"])
         self._session = session()
         self.base_url = self.config["api_server"].rstrip("/")
         self.odata_path = self.config.get("odata_path", "/odata/v2")
@@ -126,6 +141,7 @@ class SAPSuccessFactorsClient:
             data=payload,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=self.request_timeout,
+            allow_redirects=False,
         )
         raise_for_error(response)
 
@@ -178,6 +194,21 @@ class SAPSuccessFactorsClient:
         """Perform raw request without json parsing."""
         return self._make_request(method, endpoint, parse_json=False, **kwargs)
 
+    def _validate_request_endpoint(self, endpoint: str) -> None:
+        """Reject request destinations outside the configured API origin."""
+        configured = urlsplit(self.base_url)
+        requested = urlsplit(endpoint)
+        configured_port = configured.port or 443
+        requested_port = requested.port or 443
+        if (
+            requested.username is not None
+            or requested.password is not None
+            or requested.scheme != configured.scheme
+            or requested.hostname != configured.hostname
+            or requested_port != configured_port
+        ):
+            raise ValueError("Request endpoint must use the configured API server origin")
+
     @backoff.on_exception(
         wait_gen=backoff.runtime,
         exception=SAPSuccessFactorsRateLimitError,
@@ -204,7 +235,9 @@ class SAPSuccessFactorsClient:
         **kwargs,
     ) -> Optional[Mapping[Any, Any]]:
         """Perform HTTP request; backoff decorators handle retries."""
+        self._validate_request_endpoint(endpoint)
         kwargs.setdefault("timeout", self.request_timeout)
+        kwargs["allow_redirects"] = False
         with metrics.http_request_timer(endpoint):
             response = self._session.request(method, endpoint, **kwargs)
         raise_for_error(response)

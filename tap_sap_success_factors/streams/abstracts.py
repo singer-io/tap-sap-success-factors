@@ -43,6 +43,7 @@ class BaseStream(ABC):
 
     tap_stream_id = ""
     key_properties = []
+    sortable_key_properties = []
     replication_method = "FULL_TABLE"
     replication_keys = []
     entity = ""
@@ -86,6 +87,13 @@ class BaseStream(ABC):
     def build_params(self, state: Dict, parent_obj: Dict = None) -> Dict:
         """Build OData query params for stream fetch."""
         params: Dict[str, Any] = {}
+
+        if (
+            self.key_properties
+            and self.sortable_key_properties == self.key_properties
+            and not self.expand_nav_property
+        ):
+            params["$orderby"] = ",".join(self.key_properties)
 
         if self.replication_method == "INCREMENTAL" and self.replication_keys:
             key = self.replication_keys[0]
