@@ -101,3 +101,19 @@ class TestValidateAuthConfig(unittest.TestCase):
     def test_legacy_config_with_neither_complete_set_raises(self):
         with self.assertRaises(Exception):
             tap_sap_success_factors._validate_auth_config({"client_id": "cid"})
+
+    def test_refresh_token_auth_method_requires_keys(self):
+        with self.assertRaises(Exception):
+            tap_sap_success_factors._validate_auth_config(
+                {"auth_method": "refresh_token", "client_id": "cid"}
+            )
+
+    def test_refresh_token_auth_method_with_keys_passes(self):
+        tap_sap_success_factors._validate_auth_config(
+            {"auth_method": "refresh_token", "client_id": "cid", "refresh_token": "refresh"}
+        )
+
+    def test_legacy_config_infers_refresh_token(self):
+        tap_sap_success_factors._validate_auth_config(
+            {"client_id": "cid", "refresh_token": "refresh"}
+        )

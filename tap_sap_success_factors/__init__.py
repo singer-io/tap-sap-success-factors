@@ -14,9 +14,11 @@ REQUIRED_CONFIG_KEYS = ["api_server", "start_date"]
 
 AUTH_METHOD_BASIC = "basic_auth"
 AUTH_METHOD_SAML_BEARER = "saml_bearer_oauth"
+AUTH_METHOD_REFRESH_TOKEN = "refresh_token"
 
 _BASIC_AUTH_KEYS = {"username", "password"}
 _SAML_BEARER_KEYS = {"client_id", "user_id", "company_id", "private_key"}
+_REFRESH_TOKEN_KEYS = {"client_id", "refresh_token"}
 
 
 def _validate_auth_config(config):
@@ -24,6 +26,7 @@ def _validate_auth_config(config):
 
     - auth_method == "basic_auth": requires username/password.
     - auth_method == "saml_bearer_oauth": requires client_id/user_id/company_id/private_key.
+    - auth_method == "refresh_token": requires client_id/refresh_token.
     - access_token present: static token mode, no further auth keys required.
     - Legacy configs with no auth_method are still supported by inferring the
       mode from whichever complete key set is present.
@@ -49,18 +52,33 @@ def _validate_auth_config(config):
             )
         return
 
+    if auth_method == AUTH_METHOD_REFRESH_TOKEN:
+        missing = sorted(key for key in _REFRESH_TOKEN_KEYS if not config.get(key))
+        if missing:
+            raise SAPSuccessFactorsError(
+                f"auth_method is 'refresh_token' but config is missing required keys: {missing}."
+            )
+        return
+
     has_basic = all(config.get(key) for key in _BASIC_AUTH_KEYS)
     has_saml_bearer = all(config.get(key) for key in _SAML_BEARER_KEYS)
-    if not has_basic and not has_saml_bearer:
+    has_refresh_token = all(config.get(key) for key in _REFRESH_TOKEN_KEYS)
+
+    if not has_basic and not has_saml_bearer and not has_refresh_token:
         missing_basic = sorted(key for key in _BASIC_AUTH_KEYS if not config.get(key))
         missing_saml_bearer = sorted(key for key in _SAML_BEARER_KEYS if not config.get(key))
+        missing_refresh_token = sorted(key for key in _REFRESH_TOKEN_KEYS if not config.get(key))
+
         raise SAPSuccessFactorsError(
-            "Config must contain either basic auth keys ({}) or SAML bearer keys ({}). "
-            "Missing basic auth keys: {}. Missing SAML bearer keys: {}.".format(
+            "Config must contain either basic auth keys ({}), SAML bearer keys ({}), "
+            "or refresh token keys ({}). Missing basic auth keys: {}. "
+            "Missing SAML bearer keys: {}. Missing refresh token keys: {}.".format(
                 ", ".join(sorted(_BASIC_AUTH_KEYS)),
                 ", ".join(sorted(_SAML_BEARER_KEYS)),
+                ", ".join(sorted(_REFRESH_TOKEN_KEYS)),
                 missing_basic,
                 missing_saml_bearer,
+                missing_refresh_token,
             )
         )
 

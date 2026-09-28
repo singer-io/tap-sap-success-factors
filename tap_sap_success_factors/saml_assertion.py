@@ -105,6 +105,10 @@ class SAMLBearerAssertionStrategy(AssertionStrategy):
 
         return cleaned.encode("utf-8")
 
+    def _clean_certificate(self, certificate: str) -> bytes:
+        """Same PEM normalization as `_clean_private_key`, for the signing certificate."""
+        return self._clean_private_key(certificate)
+
     def _build_assertion(self):
         """ Function to generate saml assertion for OAuth exchange workflow
         Returns the generated SAML assertion as a base64-encoded string.
@@ -112,8 +116,10 @@ class SAMLBearerAssertionStrategy(AssertionStrategy):
 
         client_id = self.config.get("client_id")
         user_id = self.config.get("user_id")
-        token_url = self.config.get("api_server") + "/oauth/token"
+        token_url = self.config.get("api_server", "").rstrip("/") + "/oauth/token"
         private_key = self._clean_private_key(self.config.get("private_key"))
+        certificate = self.config.get("certificate")
+        certificate = self._clean_certificate(certificate) if certificate else None
 
         now = datetime.now(timezone.utc)
         issue_instant = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -222,6 +228,7 @@ class SAMLBearerAssertionStrategy(AssertionStrategy):
         signed_assertion = signer.sign(
             assertion,
             key=private_key,
+            cert=certificate,
             reference_uri=assertion_id
         )
 
@@ -247,7 +254,7 @@ class AssertionStrategyFactory:
 
     @classmethod
     def register(cls, assertion_type: str, strategy_cls: Type[AssertionStrategy]) -> None:
-        """ Method to add a new asertion strategy to the registry
+        """ Method to add a new assertion strategy to the registry
 
         Args:
             assertion_type (str): Type of assertion

@@ -40,6 +40,7 @@ Example config:
   "company_id": "...",
   "username": "...",
   "password": "...",
+  "private_key": "...",
   "start_date": "2024-01-01T00:00:00Z"
 }
 ```

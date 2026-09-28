@@ -19,6 +19,7 @@ from tap_sap_success_factors.saml_assertion import AssertionStrategyFactory
 LOGGER = get_logger()
 REQUEST_TIMEOUT = 300
 AUTH_METHOD_BASIC = "basic_auth"
+AUTH_METHOD_REFRESH_TOKEN = "refresh_token"
 
 
 def _get_retry_after(exc) -> int:
@@ -105,9 +106,15 @@ class SAPSuccessFactorsClient:
             self._basic_auth_header = build_basic_auth_header(self.config)
 
         if not self._basic_auth_header and not self._access_token:
-            # OAuth / SAML-bearer mode — resolve the strategy now so an
-            # unknown auth_method fails fast, at construction time.
-            self._saml_assertion_factory = AssertionStrategyFactory.create(self.config, self._auth_method)
+            # refresh_token mode exchanges the existing token directly — no
+            # SAML assertion is ever generated, so skip resolving a strategy.
+            uses_refresh_token = self._auth_method == AUTH_METHOD_REFRESH_TOKEN or (
+                not self._auth_method and self.config.get("refresh_token")
+            )
+            if not uses_refresh_token:
+                # OAuth / SAML-bearer mode — resolve the strategy now so an
+                # unknown auth_method fails fast, at construction time.
+                self._saml_assertion_factory = AssertionStrategyFactory.create(self.config, self._auth_method)
 
         config_request_timeout = self.config.get("request_timeout")
         self.request_timeout = (
@@ -137,7 +144,10 @@ class SAPSuccessFactorsClient:
             return
 
         LOGGER.info("Refreshing access token using auth method: %s", self._auth_method)
-        payload = build_saml_token_request(self.config, self._saml_assertion_factory.generate_assertion())
+        saml_assertion = (
+            self._saml_assertion_factory.generate_assertion() if self._saml_assertion_factory else None
+        )
+        payload = build_saml_token_request(self.config, saml_assertion)
         token_url = self.base_url + "/oauth/token"
 
         response = self._session.post(

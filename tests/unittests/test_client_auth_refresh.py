@@ -235,3 +235,47 @@ class TestOAuthAndStaticToken(unittest.TestCase):
         client._session.post.return_value = DummyResponse(200, {"expires_in": 3600})
         with self.assertRaises(SAPSuccessFactorsError):
             client.refresh_access_token()
+
+
+# ---------------------------------------------------------------------------
+# refresh_token mode tests
+# ---------------------------------------------------------------------------
+
+class TestRefreshTokenAuth(unittest.TestCase):
+
+    def test_construction_skips_assertion_strategy_resolution(self):
+        """A refresh_token config must never resolve a SAML assertion strategy."""
+        with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
+            client = SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://example.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "refresh_token",
+                    "client_id": "cid",
+                    "refresh_token": "refresh",
+                }
+            )
+        mock_factory.create.assert_not_called()
+        self.assertIsNone(client._saml_assertion_factory)
+
+    def test_refresh_access_token_uses_refresh_token_grant(self):
+        """refresh_access_token must not generate an assertion when refresh_token is configured."""
+        with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
+            client = SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://example.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "refresh_token",
+                    "client_id": "cid",
+                    "refresh_token": "refresh",
+                }
+            )
+        client._session = Mock()
+        client._session.post.return_value = DummyResponse(
+            200, {"access_token": "oauth_token", "expires_in": 3600}
+        )
+        client.refresh_access_token()
+        mock_factory.create.return_value.generate_assertion.assert_not_called()
+        posted_payload = client._session.post.call_args.kwargs["data"]
+        self.assertEqual(posted_payload["grant_type"], "refresh_token")
+        self.assertEqual(client.get_access_token(), "oauth_token")

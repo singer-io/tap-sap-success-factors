@@ -1,21 +1,35 @@
 import base64
+import datetime
 import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from tap_sap_success_factors.saml_assertion import (
     AssertionStrategy, AssertionStrategyFactory, SAMLBearerAssertionStrategy)
 
-TEST_PRIVATE_KEY_PEM = (
-    rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    .private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
+TEST_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+TEST_PRIVATE_KEY_PEM = TEST_PRIVATE_KEY.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.TraditionalOpenSSL,
+    encryption_algorithm=serialization.NoEncryption(),
+).decode("utf-8")
+
+_SUBJECT = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "tap-sap-success-factors-test")])
+TEST_CERTIFICATE_PEM = (
+    x509.CertificateBuilder()
+    .subject_name(_SUBJECT)
+    .issuer_name(_SUBJECT)
+    .public_key(TEST_PRIVATE_KEY.public_key())
+    .serial_number(x509.random_serial_number())
+    .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+    .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1))
+    .sign(TEST_PRIVATE_KEY, hashes.SHA256())
+    .public_bytes(serialization.Encoding.PEM)
     .decode("utf-8")
 )
 
@@ -95,6 +109,25 @@ class TestGenerateAssertionCaching(unittest.TestCase):
         decoded = base64.b64decode(assertion)
         self.assertIn(b"urn:oasis:names:tc:SAML:2.0:assertion", decoded)
         self.assertIn(b"Signature", decoded)
+
+    def test_recipient_and_audience_strip_trailing_slash_from_api_server(self):
+        """api_server with a trailing slash must not produce a double slash in the token URL."""
+        strategy = SAMLBearerAssertionStrategy(_config(api_server="https://example.com/"))
+        decoded = base64.b64decode(strategy.generate_assertion())
+        self.assertIn(b"https://example.com/oauth/token", decoded)
+        self.assertNotIn(b"https://example.com//oauth/token", decoded)
+
+    def test_certificate_is_embedded_when_configured(self):
+        """A configured certificate must be embedded as X509Certificate KeyInfo."""
+        strategy = SAMLBearerAssertionStrategy(_config(certificate=TEST_CERTIFICATE_PEM))
+        decoded = base64.b64decode(strategy.generate_assertion())
+        self.assertIn(b"X509Certificate", decoded)
+
+    def test_no_certificate_omits_x509_data(self):
+        """Without a configured certificate, no X509Certificate KeyInfo is embedded."""
+        strategy = SAMLBearerAssertionStrategy(_config())
+        decoded = base64.b64decode(strategy.generate_assertion())
+        self.assertNotIn(b"X509Certificate", decoded)
 
 
 # ---------------------------------------------------------------------------
