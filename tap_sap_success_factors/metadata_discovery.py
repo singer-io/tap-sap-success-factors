@@ -417,6 +417,7 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
 
             properties = {}
             filterable_props: set = set()
+            sortable_props: set = set()
             prop_elements = _find_children(entity_type, "Property")
             # Detect SAP "computed / expand-only" entities: every property has
             # sap:filterable=false, sap:sortable=false, sap:creatable=false AND
@@ -449,6 +450,9 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 sap_filterable = _get_sap_attrib(prop, "filterable", "true")
                 if sap_filterable.lower() != "false":
                     filterable_props.add(prop_name)
+                sap_sortable = _get_sap_attrib(prop, "sortable", "true")
+                if sap_sortable.lower() != "false":
+                    sortable_props.add(prop_name)
 
                 json_prop = {"type": EDM_TO_JSON_TYPE.get(prop_type, ["null", "string"])}
                 if prop_type in DATE_TIME_TYPES:
@@ -471,6 +475,7 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 "keys": key_names,
                 "properties": properties,
                 "filterable_props": filterable_props,
+                "sortable_props": sortable_props,
                 "is_expand_only": is_expand_only,
             }
             entity_navigations[fq_name] = navigations
@@ -794,6 +799,13 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
         mdata = metadata.to_map(mdata)
         mdata = metadata.write(
             mdata, (), f"{MDATA_NS}.entity-set", set_name
+        )
+        sortable_keys = [
+            key for key in key_properties
+            if key in entity_data.get("sortable_props", set())
+        ]
+        mdata = metadata.write(
+            mdata, (), f"{MDATA_NS}.sortable-key-properties", sortable_keys
         )
         if parent_stream:
             mdata = metadata.write(

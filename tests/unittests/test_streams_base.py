@@ -66,6 +66,47 @@ class ChildCatalog:
 
 class TestBaseStreamBuildParams(unittest.TestCase):
 
+    def test_primary_key_ordering_added(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.sortable_key_properties = ["personIdExternal"]
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$orderby"], "personIdExternal")
+
+    def test_composite_primary_key_ordering_added(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.key_properties = ["roleId", "permissionId"]
+        stream.sortable_key_properties = ["roleId", "permissionId"]
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$orderby"], "roleId,permissionId")
+
+    def test_primary_key_ordering_not_added_for_expand_stream(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.expand_nav_property = "permissionsNav"
+        stream.sortable_key_properties = ["personIdExternal"]
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$orderby", params)
+
+    def test_primary_key_ordering_not_added_for_unsortable_key(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$orderby", params)
+
     def test_incremental_filter_added(self):
         client = Mock()
         client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}

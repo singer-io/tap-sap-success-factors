@@ -15,6 +15,9 @@ class DynamicStream(BaseStream):
 
         self.tap_stream_id = catalog.tap_stream_id
         self.key_properties = catalog.key_properties or []
+        self.sortable_key_properties = root_metadata.get(
+            f"{MDATA_NS}.sortable-key-properties", []
+        )
         self.replication_keys = root_metadata.get("valid-replication-keys", [])
         self.replication_method = (
             root_metadata.get("forced-replication-method")
