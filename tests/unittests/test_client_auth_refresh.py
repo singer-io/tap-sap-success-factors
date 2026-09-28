@@ -1,14 +1,14 @@
 import base64
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tap_sap_success_factors.client import SAPSuccessFactorsClient, validate_api_server
 from tap_sap_success_factors.exceptions import SAPSuccessFactorsError
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
 
 class DummyResponse:
     def __init__(self, status_code=200, payload=None, headers=None):
@@ -125,11 +125,52 @@ class TestBasicAuth(unittest.TestCase):
                 "start_date": "2024-01-01T00:00:00Z",
                 "username": "user",
                 "password": "not_a_real_password",
+                "auth_method": "basic_auth"
             }
         )
         headers, params = client.authenticate({}, {})
         self.assertTrue(headers["Authorization"].startswith("Basic "))
         self.assertEqual(params["$format"], "json")
+
+    def test_explicit_auth_method_basic_auth_works(self):
+        """auth_method='basic_auth' with credentials builds the Basic header."""
+        client = SAPSuccessFactorsClient(
+            {
+                "api_server": "https://api4.successfactors.com",
+                "start_date": "2024-01-01T00:00:00Z",
+                "auth_method": "basic_auth",
+                "username": "user",
+                "password": "not_a_real_password",
+            }
+        )
+        self.assertTrue(client.get_auth_header().startswith("Basic "))
+
+    def test_explicit_auth_method_basic_auth_without_credentials_raises(self):
+        """auth_method='basic_auth' without username/password fails fast at construction."""
+        with self.assertRaises(SAPSuccessFactorsError):
+            SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://api4.successfactors.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "basic_auth",
+                }
+            )
+
+    def test_explicit_non_basic_auth_method_ignores_credentials(self):
+        """An explicit non-basic auth_method must use OAuth even if username/password are present."""
+        with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
+            mock_factory.create.return_value.generate_assertion.return_value = "assertion"
+            client = SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://api4.successfactors.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "saml_bearer_oauth",
+                    "username": "user",
+                    "password": "not_a_real_password",
+                }
+            )
+        self.assertIsNone(client._basic_auth_header)
+        mock_factory.create.assert_called_once_with(client.config, "saml_bearer_oauth")
 
     def test_request_raw_rejects_cross_origin_endpoint(self):
         client = SAPSuccessFactorsClient(
@@ -190,6 +231,12 @@ class TestBasicAuth(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestOAuthAndStaticToken(unittest.TestCase):
+
+    def setUp(self):
+        patcher = patch("tap_sap_success_factors.client.AssertionStrategyFactory")
+        mock_factory = patcher.start()
+        mock_factory.create.return_value.generate_assertion.return_value = "assertion"
+        self.addCleanup(patcher.stop)
 
     def test_get_auth_header_returns_bearer_for_static_token(self):
         """get_auth_header() must return Bearer <token> when access_token is configured."""
@@ -276,3 +323,47 @@ class TestOAuthAndStaticToken(unittest.TestCase):
         client._session.post.return_value = DummyResponse(200, {"expires_in": 3600})
         with self.assertRaises(SAPSuccessFactorsError):
             client.refresh_access_token()
+
+
+# ---------------------------------------------------------------------------
+# refresh_token mode tests
+# ---------------------------------------------------------------------------
+
+class TestRefreshTokenAuth(unittest.TestCase):
+
+    def test_construction_skips_assertion_strategy_resolution(self):
+        """A refresh_token config must never resolve a SAML assertion strategy."""
+        with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
+            client = SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://api4.successfactors.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "refresh_token",
+                    "client_id": "cid",
+                    "refresh_token": "refresh",
+                }
+            )
+        mock_factory.create.assert_not_called()
+        self.assertIsNone(client._saml_assertion_factory)
+
+    def test_refresh_access_token_uses_refresh_token_grant(self):
+        """refresh_access_token must not generate an assertion when refresh_token is configured."""
+        with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
+            client = SAPSuccessFactorsClient(
+                {
+                    "api_server": "https://api4.successfactors.com",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "auth_method": "refresh_token",
+                    "client_id": "cid",
+                    "refresh_token": "refresh",
+                }
+            )
+        client._session = Mock()
+        client._session.post.return_value = DummyResponse(
+            200, {"access_token": "oauth_token", "expires_in": 3600}
+        )
+        client.refresh_access_token()
+        mock_factory.create.return_value.generate_assertion.assert_not_called()
+        posted_payload = client._session.post.call_args.kwargs["data"]
+        self.assertEqual(posted_payload["grant_type"], "refresh_token")
+        self.assertEqual(client.get_access_token(), "oauth_token")
