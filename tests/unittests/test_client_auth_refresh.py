@@ -136,7 +136,7 @@ class TestBasicAuth(unittest.TestCase):
         """auth_method='basic_auth' with credentials builds the Basic header."""
         client = SAPSuccessFactorsClient(
             {
-                "api_server": "https://example.com",
+                "api_server": "https://api4.successfactors.com",
                 "start_date": "2024-01-01T00:00:00Z",
                 "auth_method": "basic_auth",
                 "username": "user",
@@ -150,7 +150,7 @@ class TestBasicAuth(unittest.TestCase):
         with self.assertRaises(SAPSuccessFactorsError):
             SAPSuccessFactorsClient(
                 {
-                    "api_server": "https://example.com",
+                    "api_server": "https://api4.successfactors.com",
                     "start_date": "2024-01-01T00:00:00Z",
                     "auth_method": "basic_auth",
                 }
@@ -162,7 +162,7 @@ class TestBasicAuth(unittest.TestCase):
             mock_factory.create.return_value.generate_assertion.return_value = "assertion"
             client = SAPSuccessFactorsClient(
                 {
-                    "api_server": "https://example.com",
+                    "api_server": "https://api4.successfactors.com",
                     "start_date": "2024-01-01T00:00:00Z",
                     "auth_method": "saml_bearer_oauth",
                     "username": "user",
@@ -336,7 +336,7 @@ class TestRefreshTokenAuth(unittest.TestCase):
         with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
             client = SAPSuccessFactorsClient(
                 {
-                    "api_server": "https://example.com",
+                    "api_server": "https://api4.successfactors.com",
                     "start_date": "2024-01-01T00:00:00Z",
                     "auth_method": "refresh_token",
                     "client_id": "cid",
@@ -351,7 +351,7 @@ class TestRefreshTokenAuth(unittest.TestCase):
         with patch("tap_sap_success_factors.client.AssertionStrategyFactory") as mock_factory:
             client = SAPSuccessFactorsClient(
                 {
-                    "api_server": "https://example.com",
+                    "api_server": "https://api4.successfactors.com",
                     "start_date": "2024-01-01T00:00:00Z",
                     "auth_method": "refresh_token",
                     "client_id": "cid",
