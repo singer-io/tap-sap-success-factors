@@ -60,6 +60,9 @@ class BaseStream(ABC):
     # expand_parent_entity_set instead of querying the entity set directly.
     expand_nav_property = ""
     expand_parent_entity_set = ""
+    # Nav properties expanded on this stream's own query and flattened
+    # inline into the record (e.g. "emailTypeNav" -> "emailTypeNav_<field>").
+    flatten_nav_properties = []
     path = ""
 
     def __init__(self, client=None, catalog=None) -> None:
@@ -94,6 +97,9 @@ class BaseStream(ABC):
             and not self.expand_nav_property
         ):
             params["$orderby"] = ",".join(self.key_properties)
+
+        if self.flatten_nav_properties and not self.expand_nav_property:
+            params["$expand"] = ",".join(self.flatten_nav_properties)
 
         if self.replication_method == "INCREMENTAL" and self.replication_keys:
             key = self.replication_keys[0]
@@ -221,6 +227,31 @@ class BaseStream(ABC):
         """Normalize all date-time fields in a record before Singer transformation."""
         return self._normalize_datetimes_with_schema(record, self.schema)
 
+    def flatten_nav_data(self, record: Dict) -> Dict:
+        """Inline-flatten $expand-ed Nav properties into the record.
+
+        For each nav in ``flatten_nav_properties`` the raw OData payload is
+        the related entity's full object (not a ``__deferred`` link, since
+        ``build_params`` requested ``$expand`` for it). Its scalar fields
+        are hoisted onto this record as ``<nav>_<field>``; any of ITS OWN
+        still-unexpanded navigation properties collapse to a single
+        ``<nav>_<subNav>_deferred_uri`` placeholder (one level deep only,
+        matching the discovery-time schema).
+        """
+        for nav_name in self.flatten_nav_properties:
+            if nav_name not in record:
+                continue
+            nav_data = record[nav_name]
+            if not isinstance(nav_data, dict) or "__deferred" in nav_data:
+                continue  # expand failed/absent — leave the raw value as-is
+            del record[nav_name]
+            for key, value in nav_data.items():
+                if isinstance(value, dict) and "__deferred" in value:
+                    record[f"{nav_name}_{key}_deferred_uri"] = value["__deferred"].get("uri")
+                else:
+                    record[f"{nav_name}_{key}"] = value
+        return record
+
     def modify_object(self, record: Dict, _parent_record: Dict = None) -> Dict:
         """Allow child streams to enrich records."""
         if not _parent_record or not self.parent:
@@ -338,6 +369,7 @@ class BaseStream(ABC):
 
         with metrics.record_counter(self.tap_stream_id) as counter:
             for record in self.get_records(state=state, parent_obj=parent_obj):
+                record = self.flatten_nav_data(record)
                 record = self.modify_object(record, parent_obj)
                 record = self.normalize_record_datetimes(copy.deepcopy(record))
                 transformed_record = transformer.transform(

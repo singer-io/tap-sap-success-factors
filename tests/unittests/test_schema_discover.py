@@ -673,3 +673,165 @@ class TestParentRelationshipTypeMismatch(unittest.TestCase):
             "String-String relationship must NOT be dropped or altered",
         )
         self.assertEqual(child["parent_filter_field"], "parentId")
+
+
+# ---------------------------------------------------------------------------
+# Group 6: Flatten to-one NavigationProperty lookups inline (e.g. emailTypeNav
+# -> PicklistOption).  Mirrors the real SuccessFactors PerEmail/PicklistOption
+# structure confirmed against the live $metadata document.
+# ---------------------------------------------------------------------------
+
+class TestFlattenNavProperties(unittest.TestCase):
+    """emailTypeNav-style to-one lookup Navs must be flattened inline."""
+
+    # PerEmail has two to-one Navs: emailTypeNav (-> PicklistOption, a pure
+    # lookup) and personNav (-> Person, which is ALSO the inferred parent
+    # relationship).  PicklistOption itself has one further to-many Nav
+    # (childPicklistOptions) that must collapse to a single deferred_uri
+    # placeholder rather than being recursively flattened.
+    EDMX = """\
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
+  <edmx:DataServices>
+    <Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm" Namespace="SFOData">
+
+      <EntityType Name="Person">
+        <Key><PropertyRef Name="personIdExternal"/></Key>
+        <Property Name="personIdExternal" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+
+      <EntityType Name="PicklistOption">
+        <Key><PropertyRef Name="id"/></Key>
+        <Property Name="id" Type="Edm.Int64" Nullable="false"/>
+        <Property Name="externalCode" Type="Edm.String"/>
+        <Property Name="status" Type="Edm.String"/>
+        <NavigationProperty Name="childPicklistOptions"
+          Relationship="SFOData.picklistoption_rel_children"
+          FromRole="picklistoption" ToRole="childpicklistoptions"/>
+      </EntityType>
+
+      <EntityType Name="PerEmail">
+        <Key>
+          <PropertyRef Name="emailType"/>
+          <PropertyRef Name="personIdExternal"/>
+        </Key>
+        <Property Name="emailType" Type="Edm.String" Nullable="false"/>
+        <Property Name="personIdExternal" Type="Edm.String" Nullable="false"/>
+        <Property Name="emailAddress" Type="Edm.String"/>
+        <NavigationProperty Name="emailTypeNav"
+          Relationship="SFOData.PerEmail_emailType_picklist"
+          FromRole="PerEmail" ToRole="picklistoption"/>
+        <NavigationProperty Name="personNav"
+          Relationship="SFOData.PerEmail_Person"
+          FromRole="PerEmail" ToRole="PerPerson_ref"/>
+      </EntityType>
+
+      <Association Name="picklistoption_rel_children">
+        <End Type="SFOData.PicklistOption" Multiplicity="1" Role="picklistoption"/>
+        <End Type="SFOData.PicklistOption" Multiplicity="*" Role="childpicklistoptions"/>
+      </Association>
+
+      <Association Name="PerEmail_emailType_picklist">
+        <End Type="SFOData.PerEmail" Multiplicity="*" Role="PerEmail"/>
+        <End Type="SFOData.PicklistOption" Multiplicity="1" Role="picklistoption"/>
+      </Association>
+
+      <Association Name="PerEmail_Person">
+        <End Type="SFOData.PerEmail" Multiplicity="*" Role="PerEmail"/>
+        <End Type="SFOData.Person" Multiplicity="1" Role="PerPerson_ref"/>
+      </Association>
+
+      <EntityContainer Name="C"
+          m:IsDefaultEntityContainer="true"
+          xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+        <EntitySet Name="Person" EntityType="SFOData.Person"/>
+        <EntitySet Name="PicklistOption" EntityType="SFOData.PicklistOption"/>
+        <EntitySet Name="PerEmail" EntityType="SFOData.PerEmail"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
+"""
+
+    def test_to_one_lookup_nav_is_flattened_inline(self):
+        """emailTypeNav must be replaced by flattened PicklistOption fields
+        plus a deferred_uri placeholder for PicklistOption's own Nav."""
+        schemas, _, stream_defs = discover_dynamic_streams(_client(self.EDMX))
+        props = schemas["per_email"]["properties"]
+
+        self.assertNotIn("emailTypeNav", props)
+        self.assertEqual(
+            props["emailTypeNav_id"]["type"], ["null", "integer", "string"]
+        )
+        self.assertEqual(
+            props["emailTypeNav_externalCode"]["type"], ["null", "string"]
+        )
+        self.assertEqual(
+            props["emailTypeNav_status"]["type"], ["null", "string"]
+        )
+        self.assertEqual(
+            props["emailTypeNav_childPicklistOptions_deferred_uri"]["type"],
+            ["null", "string"],
+        )
+        self.assertEqual(
+            stream_defs["per_email"]["flatten_nav_properties"],
+            ["emailTypeNav"],
+        )
+
+    def test_parent_link_nav_is_not_flattened(self):
+        """personNav resolves this stream's parent relationship, so it must
+        be excluded from flattening (would duplicate the parent record)."""
+        schemas, _, stream_defs = discover_dynamic_streams(_client(self.EDMX))
+        props = schemas["per_email"]["properties"]
+
+        self.assertNotIn("personNav_personIdExternal", props)
+        self.assertEqual(stream_defs["per_email"]["parent_stream"], "person")
+        self.assertNotIn(
+            "personNav", stream_defs["per_email"]["flatten_nav_properties"]
+        )
+
+    def test_to_many_nav_is_not_flattened(self):
+        """childPicklistOptions on PicklistOption is to-many and must never
+        be flattened (only reachable here as a deferred_uri placeholder)."""
+        _, _, stream_defs = discover_dynamic_streams(_client(self.EDMX))
+        self.assertEqual(
+            stream_defs["picklist_option"]["flatten_nav_properties"], []
+        )
+
+    def test_blocked_nav_is_never_flattened(self):
+        """wfRequestNav must be excluded from flattening even when it is a
+        to-one lookup, mirroring the existing $expand denylist."""
+        xml = self.EDMX.replace(
+            '<NavigationProperty Name="personNav"\n'
+            '          Relationship="SFOData.PerEmail_Person"\n'
+            '          FromRole="PerEmail" ToRole="PerPerson_ref"/>',
+            '<NavigationProperty Name="personNav"\n'
+            '          Relationship="SFOData.PerEmail_Person"\n'
+            '          FromRole="PerEmail" ToRole="PerPerson_ref"/>\n'
+            '        <NavigationProperty Name="wfRequestNav"\n'
+            '          Relationship="SFOData.PerEmail_WfRequest"\n'
+            '          FromRole="PerEmail" ToRole="WfRequest_ref"/>',
+        ).replace(
+            "      <Association Name=\"PerEmail_Person\">",
+            "      <Association Name=\"PerEmail_WfRequest\">\n"
+            "        <End Type=\"SFOData.PerEmail\" Multiplicity=\"*\" Role=\"PerEmail\"/>\n"
+            "        <End Type=\"SFOData.WfRequest\" Multiplicity=\"1\" Role=\"WfRequest_ref\"/>\n"
+            "      </Association>\n\n"
+            "      <Association Name=\"PerEmail_Person\">",
+        ).replace(
+            '<EntitySet Name="PerEmail" EntityType="SFOData.PerEmail"/>',
+            '<EntitySet Name="PerEmail" EntityType="SFOData.PerEmail"/>\n'
+            '        <EntitySet Name="WfRequest" EntityType="SFOData.WfRequest"/>',
+        ).replace(
+            '<EntityType Name="PerEmail">',
+            '<EntityType Name="WfRequest">\n'
+            '        <Key><PropertyRef Name="wfRequestId"/></Key>\n'
+            '        <Property Name="wfRequestId" Type="Edm.Int64" Nullable="false"/>\n'
+            '      </EntityType>\n\n'
+            '      <EntityType Name="PerEmail">',
+        )
+
+        _, _, stream_defs = discover_dynamic_streams(_client(xml))
+        self.assertNotIn(
+            "wfRequestNav", stream_defs["per_email"]["flatten_nav_properties"]
+        )
