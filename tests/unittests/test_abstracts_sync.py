@@ -125,6 +125,86 @@ class FakeCatalog:
     ]
 
 
+class FakeEmailChildCatalog:
+    """Catalog entry for 'per_email': INCREMENTAL AND filtered by parent.
+
+    Mirrors the real PerEmail entity — a child of per_person that also
+    carries its own (unreliable) lastModifiedDateTime replication key.
+    """
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "personIdExternal": {"type": ["null", "string"]},
+                    "lastModifiedDateTime": {
+                        "type": ["null", "string"],
+                        "format": "date-time",
+                    },
+                },
+            }
+
+    schema = _Schema()
+    stream = "per_email"
+    tap_stream_id = "per_email"
+    key_properties = ["personIdExternal"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": True,
+                "valid-replication-keys": ["lastModifiedDateTime"],
+                "forced-replication-method": "INCREMENTAL",
+                "tap-sap-success-factors.entity-set": "PerEmail",
+                "api-path": "/odata/v2/PerEmail",
+                "parent-tap-stream-id": "per_person",
+                "tap-sap-success-factors.parent-filter-field": "personIdExternal",
+                "tap-sap-success-factors.parent-key-field": "personIdExternal",
+            },
+        }
+    ]
+
+
+class FakeUnselectedParentCatalog:
+    """Catalog entry for an INCREMENTAL stream added to sync purely to reach a
+    selected child (sync.py appends unselected parents of selected children
+    to streams_to_sync) — its own 'selected' metadata flag is False.
+    """
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "personIdExternal": {"type": ["null", "string"]},
+                    "lastModifiedDateTime": {
+                        "type": ["null", "string"],
+                        "format": "date-time",
+                    },
+                },
+            }
+
+    schema = _Schema()
+    stream = "per_person"
+    tap_stream_id = "per_person"
+    key_properties = ["personIdExternal"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": False,
+                "valid-replication-keys": ["lastModifiedDateTime"],
+                "forced-replication-method": "INCREMENTAL",
+                "tap-sap-success-factors.entity-set": "PerPerson",
+                "api-path": "/odata/v2/PerPerson",
+            },
+        }
+    ]
+
+
 def _client(mock_mode=False):
     client = Mock()
     client.config = {
@@ -216,6 +296,34 @@ class TestSync(unittest.TestCase):
         write_record_patch.assert_called_once()
         write_bookmark_patch.assert_called_once()
 
+    def test_unselected_pass_through_parent_does_not_write_own_bookmark(self):
+        """A stream synced only to reach a selected child (its own 'selected'
+        metadata is False) must not advance its own bookmark — otherwise a
+        later run that does select it would skip records never really synced.
+        """
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        stream = DynamicStream(client=client, catalog=FakeUnselectedParentCatalog())
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record") as write_record_patch:
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark") as write_bookmark_patch:
+                stream.sync(state={}, transformer=transformer)
+
+        write_record_patch.assert_not_called()
+        write_bookmark_patch.assert_not_called()
+
     def test_normalizes_odata_datetime_before_transform(self):
         client = _client()
         client.get.return_value = {
@@ -244,6 +352,66 @@ class TestSync(unittest.TestCase):
                 stream.sync(state={}, transformer=transformer)
 
         self.assertEqual(observed["last_modified"], "2024-01-02T00:00:00.000000Z")
+
+
+# ---------------------------------------------------------------------------
+# Regression: INCREMENTAL child streams must not drop stale-but-valid records
+# ---------------------------------------------------------------------------
+
+class TestIncrementalChildSync(unittest.TestCase):
+
+    def test_stale_child_record_not_dropped_when_parent_scoped(self):
+        """A child record whose own lastModifiedDateTime predates start_date
+        must still be emitted when fetched for a specific parent — combining
+        the child's own incremental filter with the parent filter previously
+        caused nearly all historical child records to be silently dropped
+        (e.g. PerEmail records versus their PerPerson parent).
+        """
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        # Older than config start_date (2024-01-01) — this is
+                        # the realistic case for rarely-touched child rows.
+                        "lastModifiedDateTime": "2010-01-01T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        stream = DynamicStream(client=client, catalog=FakeEmailChildCatalog())
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record") as write_record_patch:
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                stream.sync(
+                    state={},
+                    transformer=transformer,
+                    parent_obj={"personIdExternal": "1"},
+                )
+
+        write_record_patch.assert_called_once()
+
+    def test_parent_scoped_fetch_sends_only_parent_filter(self):
+        """The outbound OData request for a parent-scoped INCREMENTAL child
+        fetch must contain only the parent filter, not a date filter.
+        """
+        client = _client()
+        client.get.return_value = {"d": {"results": [], "__next": None}}
+        stream = DynamicStream(client=client, catalog=FakeEmailChildCatalog())
+        transformer = Mock()
+
+        stream.sync(
+            state={},
+            transformer=transformer,
+            parent_obj={"personIdExternal": "1"},
+        )
+
+        _, kwargs = client.get.call_args
+        self.assertEqual(kwargs["params"]["$filter"], "personIdExternal eq '1'")
 
 
 # ---------------------------------------------------------------------------

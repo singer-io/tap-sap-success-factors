@@ -64,6 +64,48 @@ class ChildCatalog:
     ]
 
 
+class IncrementalChildCatalog:
+    """Catalog entry for an INCREMENTAL child stream (e.g. per_email).
+
+    Mirrors a real-world entity that is BOTH filtered by its parent's key
+    AND forced-replication-method INCREMENTAL with its own replication key.
+    """
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "personIdExternal": {"type": ["null", "string"]},
+                    "lastModifiedDateTime": {
+                        "type": ["null", "string"],
+                        "format": "date-time",
+                    },
+                },
+            }
+
+    schema = _Schema()
+    stream = "per_email"
+    tap_stream_id = "per_email"
+    key_properties = ["personIdExternal"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": True,
+                "valid-replication-keys": ["lastModifiedDateTime"],
+                "forced-replication-method": "INCREMENTAL",
+                "tap-sap-success-factors.entity-set": "PerEmail",
+                "api-path": "/odata/v2/PerEmail",
+                "parent-tap-stream-id": "per_person",
+                "tap-sap-success-factors.parent-filter-field": "personIdExternal",
+                "tap-sap-success-factors.parent-key-field": "personIdExternal",
+            },
+        }
+    ]
+
+
 class TestBaseStreamBuildParams(unittest.TestCase):
 
     def test_primary_key_ordering_added(self):
@@ -112,6 +154,34 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}
         stream = DynamicStream(client=client, catalog=FakeCatalog())
         params = stream.build_params(state={})
+        self.assertIn("$filter", params)
+        self.assertIn("lastModifiedDateTime", params["$filter"])
+
+    def test_incremental_filter_omitted_for_parent_scoped_child_fetch(self):
+        """A parent-scoped child (INCREMENTAL + parent_filter_field) must NOT
+        also apply its own date filter: combining both silently drops
+        historical child records whose own lastModifiedDateTime predates the
+        bookmark/start_date even though they still belong to the parent.
+        """
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}
+        stream = DynamicStream(client=client, catalog=IncrementalChildCatalog())
+
+        params = stream.build_params(state={}, parent_obj={"personIdExternal": "P-1"})
+
+        self.assertIn("$filter", params)
+        self.assertNotIn("lastModifiedDateTime", params["$filter"])
+        self.assertEqual(params["$filter"], "personIdExternal eq 'P-1'")
+
+    def test_incremental_filter_still_applied_without_parent_obj(self):
+        """The same INCREMENTAL child stream, when queried without a parent
+        context, keeps its own date filter (e.g. probing/direct queries)."""
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}
+        stream = DynamicStream(client=client, catalog=IncrementalChildCatalog())
+
+        params = stream.build_params(state={})
+
         self.assertIn("$filter", params)
         self.assertIn("lastModifiedDateTime", params["$filter"])
 

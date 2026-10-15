@@ -95,7 +95,22 @@ class BaseStream(ABC):
         ):
             params["$orderby"] = ",".join(self.key_properties)
 
-        if self.replication_method == "INCREMENTAL" and self.replication_keys:
+        # When fetching a child's records for one specific parent (non-expand),
+        # never also apply the child's own replication-key date filter: child
+        # entities (e.g. PerEmail) are frequently never independently "touched"
+        # in SAP after creation, so their own lastModifiedDateTime predates the
+        # bookmark/start_date and combining both filters silently drops nearly
+        # all historical child records (only the few recently-touched ones pass).
+        # Completeness for these records is governed by the parent's bookmark
+        # (the parent decides whether to resync its children at all), not by
+        # the child's own unreliable timestamp.
+        is_parent_scoped_fetch = bool(parent_obj and self.parent_filter_field)
+
+        if (
+            self.replication_method == "INCREMENTAL"
+            and self.replication_keys
+            and not is_parent_scoped_fetch
+        ):
             key = self.replication_keys[0]
             bookmark = self.effective_bookmark or self.get_bookmark(
                 state,
@@ -318,10 +333,20 @@ class BaseStream(ABC):
 
     def sync(self, state: Dict, transformer: Transformer, parent_obj: Dict = None) -> int:
         """Sync stream records and children streams."""
-        bookmark_key = self.replication_keys[0] if self.replication_keys else None
-        bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
+        # A parent-scoped fetch (non-expand) already fully fetches every
+        # record for the given parent key, so client-side filtering by this
+        # stream's own replication key must be skipped — see build_params()
+        # for why combining both filters silently drops historical children.
+        is_parent_scoped_fetch = bool(parent_obj and self.parent_filter_field)
 
-        if bookmark_key and self.child_to_sync:
+        bookmark_key = self.replication_keys[0] if self.replication_keys else None
+        bookmark = (
+            self.get_bookmark(state, self.tap_stream_id)
+            if bookmark_key and not is_parent_scoped_fetch
+            else None
+        )
+
+        if bookmark_key and self.child_to_sync and not is_parent_scoped_fetch:
             parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
             for child in self.child_to_sync:
                 child_bookmark = self.get_bookmark(
@@ -377,9 +402,14 @@ class BaseStream(ABC):
                         )
 
             if bookmark_key and current_max_bookmark:
-                self.write_bookmark(
-                    state, self.tap_stream_id, value=current_max_bookmark
-                )
+                # sync.py adds unselected parents to streams_to_sync purely so a
+                # selected child can be reached — only advance the parent's OWN
+                # bookmark when it is actually selected, otherwise a later run
+                # that *does* select it would skip records never really synced.
+                if self.is_selected():
+                    self.write_bookmark(
+                        state, self.tap_stream_id, value=current_max_bookmark
+                    )
 
                 if self.child_to_sync:
                     parent_bookmark_key = (
