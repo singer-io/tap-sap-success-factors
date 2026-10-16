@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import re
 from abc import ABC
 from datetime import datetime, timedelta, timezone
@@ -60,6 +60,9 @@ class BaseStream(ABC):
     # expand_parent_entity_set instead of querying the entity set directly.
     expand_nav_property = ""
     expand_parent_entity_set = ""
+    # Nav properties expanded on this stream's own query and flattened
+    # inline into the record (e.g. "emailTypeNav" -> "emailTypeNav_<field>").
+    flatten_nav_properties = []
     path = ""
 
     def __init__(self, client=None, catalog=None) -> None:
@@ -84,6 +87,28 @@ class BaseStream(ABC):
         """Return whether stream is selected in catalog metadata."""
         return metadata.get(self.metadata, (), "selected")
 
+    def selected_flatten_nav_properties(self):
+        """Return expansions needed by selected fields on a selected stream."""
+        if not self.is_selected():
+            return []
+
+        schema_properties = self.schema.get("properties", {})
+        selected_navs = []
+        for nav_name in self.flatten_nav_properties:
+            nav_prefix = f"{nav_name}_"
+            for field_name in schema_properties:
+                if not field_name.startswith(nav_prefix):
+                    continue
+                breadcrumb = ("properties", field_name)
+                inclusion = metadata.get(self.metadata, breadcrumb, "inclusion")
+                selected = metadata.get(self.metadata, breadcrumb, "selected")
+                if inclusion == "automatic" or (
+                    inclusion != "unsupported" and selected is not False
+                ):
+                    selected_navs.append(nav_name)
+                    break
+        return selected_navs
+
     def build_params(self, state: Dict, parent_obj: Dict = None) -> Dict:
         """Build OData query params for stream fetch."""
         params: Dict[str, Any] = {}
@@ -94,6 +119,10 @@ class BaseStream(ABC):
             and not self.expand_nav_property
         ):
             params["$orderby"] = ",".join(self.key_properties)
+
+        flatten_navs = self.selected_flatten_nav_properties()
+        if flatten_navs and not self.expand_nav_property:
+            params["$expand"] = ",".join(flatten_navs)
 
         if self.replication_method == "INCREMENTAL" and self.replication_keys:
             key = self.replication_keys[0]
@@ -221,6 +250,31 @@ class BaseStream(ABC):
         """Normalize all date-time fields in a record before Singer transformation."""
         return self._normalize_datetimes_with_schema(record, self.schema)
 
+    def flatten_nav_data(self, record: Dict) -> Dict:
+        """Inline-flatten $expand-ed Nav properties into the record.
+
+        For each nav in ``flatten_nav_properties`` the raw OData payload is
+        the related entity's full object (not a ``__deferred`` link, since
+        ``build_params`` requested ``$expand`` for it). Its scalar fields
+        are hoisted onto this record as ``<nav>_<field>``; any of ITS OWN
+        still-unexpanded navigation properties collapse to a single
+        ``<nav>_<subNav>_deferred_uri`` placeholder (one level deep only,
+        matching the discovery-time schema).
+        """
+        for nav_name in self.flatten_nav_properties:
+            if nav_name not in record:
+                continue
+            nav_data = record[nav_name]
+            if not isinstance(nav_data, dict) or "__deferred" in nav_data:
+                continue  # expand failed/absent — leave the raw value as-is
+            del record[nav_name]
+            for key, value in nav_data.items():
+                if isinstance(value, dict) and "__deferred" in value:
+                    record[f"{nav_name}_{key}_deferred_uri"] = value["__deferred"].get("uri")
+                else:
+                    record[f"{nav_name}_{key}"] = value
+        return record
+
     def modify_object(self, record: Dict, _parent_record: Dict = None) -> Dict:
         """Allow child streams to enrich records."""
         if not _parent_record or not self.parent:
@@ -319,7 +373,15 @@ class BaseStream(ABC):
     def sync(self, state: Dict, transformer: Transformer, parent_obj: Dict = None) -> int:
         """Sync stream records and children streams."""
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
-        bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
+
+        if self.effective_bookmark is not None:
+            bookmark = self.effective_bookmark
+        else:
+            bookmark = (
+                self.get_bookmark(state, self.tap_stream_id)
+                if bookmark_key and self.is_selected()
+                else None
+            )
 
         if bookmark_key and self.child_to_sync:
             parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
@@ -332,12 +394,14 @@ class BaseStream(ABC):
                 bookmark = min(bookmark, child_bookmark) if bookmark else child_bookmark
 
         self.effective_bookmark = bookmark
+
         # Only advance from real records — do NOT pre-seed with start_date so
         # that 0-record syncs never write a spurious bookmark.
         current_max_bookmark = None
 
         with metrics.record_counter(self.tap_stream_id) as counter:
             for record in self.get_records(state=state, parent_obj=parent_obj):
+                record = self.flatten_nav_data(record)
                 record = self.modify_object(record, parent_obj)
                 record = self.normalize_record_datetimes(copy.deepcopy(record))
                 transformed_record = transformer.transform(
@@ -377,9 +441,14 @@ class BaseStream(ABC):
                         )
 
             if bookmark_key and current_max_bookmark:
-                self.write_bookmark(
-                    state, self.tap_stream_id, value=current_max_bookmark
-                )
+                # An unselected stream can still be synced here purely to reach a
+                # selected child (sync.py force-adds it) — it must not advance its
+                # own bookmark, or records never actually emitted get skipped if
+                # this stream is selected in a later run.
+                if self.is_selected():
+                    self.write_bookmark(
+                        state, self.tap_stream_id, value=current_max_bookmark
+                    )
 
                 if self.child_to_sync:
                     parent_bookmark_key = (
@@ -392,7 +461,5 @@ class BaseStream(ABC):
                             key=parent_bookmark_key,
                             value=current_max_bookmark,
                         )
-
-            self.effective_bookmark = None
 
             return counter.value

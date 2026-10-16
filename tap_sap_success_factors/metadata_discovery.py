@@ -418,7 +418,17 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
             properties = {}
             filterable_props: set = set()
             sortable_props: set = set()
-            prop_elements = _find_children(entity_type, "Property")
+            # NOTE: _find_children matches by tag *suffix*, and
+            # "NavigationProperty".endswith("Property") is True, so a naive
+            # _find_children(entity_type, "Property") call also scoops up
+            # NavigationProperty elements. Filter those back out explicitly —
+            # otherwise every Nav field gets a bogus {"type": "string"} schema
+            # entry (no "Type" attribute on NavigationProperty defaults to
+            # Edm.String) in addition to being tracked in `navigations` below.
+            prop_elements = [
+                el for el in _find_children(entity_type, "Property")
+                if not el.tag.endswith("NavigationProperty")
+            ]
             # Detect SAP "computed / expand-only" entities: every property has
             # sap:filterable=false, sap:sortable=false, sap:creatable=false AND
             # the entity has no outbound NavigationProperties.  The SAP API
@@ -768,6 +778,43 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                     relationship_name = None
                     relationship_inference = None
 
+        # ------------------------------------------------------------------
+        # Group 6: Flatten to-one (single-valued) NavigationProperty lookups
+        # only after parent inference and compatibility validation. A nav
+        # initially considered a parent link is still a lookup if that
+        # relationship is later rejected.
+        # ------------------------------------------------------------------
+        flatten_navs: List[str] = []
+        for nav in entity_navigations.get(entity_type, []):
+            nav_name = nav.get("name")
+            if not nav_name or (nav_name == matched_nav_name and parent_stream):
+                continue
+            if nav_name in BLOCKED_EXPAND_NAV_PROPERTIES:
+                continue
+
+            assoc = associations.get(nav.get("relationship"))
+            if not assoc:
+                continue
+            target_end = assoc.get("ends", {}).get(nav.get("to_role"), {})
+            if target_end.get("multiplicity") not in ("0..1", "1"):
+                continue
+
+            target_type = target_end.get("type")
+            target_entity_data = entity_types.get(target_type)
+            if not target_entity_data:
+                continue
+
+            properties.pop(nav_name, None)
+            for sub_name, sub_schema in target_entity_data["properties"].items():
+                properties[f"{nav_name}_{sub_name}"] = dict(sub_schema)
+            for sub_nav in entity_navigations.get(target_type, []):
+                sub_nav_name = sub_nav.get("name")
+                if sub_nav_name:
+                    properties[f"{nav_name}_{sub_nav_name}_deferred_uri"] = {
+                        "type": ["null", "string"]
+                    }
+            flatten_navs.append(nav_name)
+
         if parent_stream and parent_key_field:
             parent_entity_type = stream_to_entity_type.get(parent_stream)
             parent_properties = entity_types.get(parent_entity_type, {}).get(
@@ -807,6 +854,10 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
         mdata = metadata.write(
             mdata, (), f"{MDATA_NS}.sortable-key-properties", sortable_keys
         )
+        if flatten_navs:
+            mdata = metadata.write(
+                mdata, (), f"{MDATA_NS}.flatten-nav-properties", flatten_navs
+            )
         if parent_stream:
             mdata = metadata.write(
                 mdata, (), "parent-tap-stream-id", parent_stream,
@@ -909,6 +960,7 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
             "replication_method": replication_method,
             "parent_stream": parent_stream,
             "parent_filter_field": parent_filter_field,
+            "flatten_nav_properties": flatten_navs,
             # JSON schema of the parent_filter_field (e.g. {"type": ["null",
             # "integer"]} or {"type": ["null", "string"], "format":
             # "date-time"}).  Used by stream_probe to build a type-compatible
