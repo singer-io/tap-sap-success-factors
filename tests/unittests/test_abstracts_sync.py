@@ -337,6 +337,135 @@ class TestEffectiveBookmarkCaching(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Sample-data fixture for the real per_person -> per_email relationship.
+#
+# There is no SAP SuccessFactors test account available to exercise this
+# against a live connection, so this models the production entities/metadata
+# directly (entity-set PerEmail, parent-filter-field/parent-key-field
+# personIdExternal, own INCREMENTAL replication key lastModifiedDateTime)
+# with representative OData-shaped sample payloads.
+# ---------------------------------------------------------------------------
+
+class FakePerEmailCatalog:
+    """Catalog entry for 'per_email', an INCREMENTAL child of 'per_person'."""
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "emailAddress": {"type": ["null", "string"]},
+                    "personIdExternal": {"type": ["null", "string"]},
+                    "lastModifiedDateTime": {
+                        "type": ["null", "string"],
+                        "format": "date-time",
+                    },
+                },
+            }
+
+    schema = _Schema()
+    stream = "per_email"
+    tap_stream_id = "per_email"
+    key_properties = ["personIdExternal", "emailAddress"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": True,
+                "valid-replication-keys": ["lastModifiedDateTime"],
+                "forced-replication-method": "INCREMENTAL",
+                "tap-sap-success-factors.entity-set": "PerEmail",
+                "api-path": "/odata/v2/PerEmail",
+                "parent-tap-stream-id": "per_person",
+                "tap-sap-success-factors.parent-filter-field": "personIdExternal",
+                "tap-sap-success-factors.parent-key-field": "personIdExternal",
+            },
+        }
+    ]
+
+
+class TestEffectiveBookmarkCachingRealWorldScenario(unittest.TestCase):
+    """Reproduces the production per_person -> per_email data-loss scenario
+    end-to-end, through the real parent.sync() -> child.sync() recursion
+    (not a manual repeated call), using sample data shaped like real
+    SAP SuccessFactors records."""
+
+    def test_second_persons_email_is_not_dropped_by_first_persons_bookmark_write(self):
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "100",
+                        "lastModifiedDateTime": "2024-01-05T00:00:00.000000Z",
+                    },
+                    {
+                        "personIdExternal": "101",
+                        "lastModifiedDateTime": "2024-01-06T00:00:00.000000Z",
+                    },
+                ],
+                "__next": None,
+            }
+        }
+        parent_stream = DynamicStream(client=parent_client, catalog=FakeCatalog())
+
+        child_client = _client()
+        # Person 100's email was recently touched; person 101's email predates
+        # it but is still a legitimate record that has never been synced before.
+        child_client.get.side_effect = [
+            {
+                "d": {
+                    "results": [
+                        {
+                            "personIdExternal": "100",
+                            "emailAddress": "p100@example.com",
+                            "lastModifiedDateTime": "2024-06-01T00:00:00.000000Z",
+                        }
+                    ],
+                    "__next": None,
+                }
+            },
+            {
+                "d": {
+                    "results": [
+                        {
+                            "personIdExternal": "101",
+                            "emailAddress": "p101@example.com",
+                            "lastModifiedDateTime": "2024-03-01T00:00:00.000000Z",
+                        }
+                    ],
+                    "__next": None,
+                }
+            },
+        ]
+        child_stream = DynamicStream(client=child_client, catalog=FakePerEmailCatalog())
+        parent_stream.child_to_sync = [child_stream]
+
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        emitted_emails = []
+
+        def _capture(stream_id, record, **_):
+            if stream_id == "per_email":
+                emitted_emails.append(record["emailAddress"])
+
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=_capture,
+        ):
+            parent_stream.sync(state={}, transformer=transformer)
+
+        self.assertEqual(
+            emitted_emails,
+            ["p100@example.com", "p101@example.com"],
+            "Both per_email records must be emitted — person 101's email must "
+            "not be dropped just because person 100's email advanced the "
+            "per_email bookmark earlier in this same run",
+        )
+
+
+# ---------------------------------------------------------------------------
 # modify_object unit tests
 # ---------------------------------------------------------------------------
 
