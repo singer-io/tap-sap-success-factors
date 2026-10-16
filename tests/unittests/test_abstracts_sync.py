@@ -381,6 +381,38 @@ class TestEffectiveBookmarkCaching(unittest.TestCase):
             "effective_bookmark must stay cached after sync() returns",
         )
 
+    def test_effective_bookmark_reflects_child_alignment_not_raw_own_bookmark(self):
+        """effective_bookmark must be the child-aligned (minimum) value, not
+        the parent's raw own bookmark. build_params() reads effective_bookmark
+        to build the SAP $filter query, so an un-aligned value would stop the
+        API call itself from ever fetching records needed to backfill a
+        lagging/newly-selected child."""
+        client = _client()
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.child_to_sync = [Mock(tap_stream_id="per_email")]
+        stream.get_records = Mock(return_value=iter([]))
+
+        state = {
+            "bookmarks": {
+                # Parent has advanced well past start_date...
+                "per_person": {"lastModifiedDateTime": "2024-06-01T00:00:00.000000Z"},
+                # ...but per_email has no composite entry yet (never caught up),
+                # so it falls back to the configured start_date.
+            }
+        }
+        transformer = Mock()
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                stream.sync(state=state, transformer=transformer)
+
+        self.assertEqual(
+            stream.effective_bookmark,
+            client.config["start_date"],
+            "effective_bookmark must reflect the child-aligned (older) "
+            "bookmark, not the parent's own already-advanced bookmark",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Sample-data fixture for the real per_person -> per_email relationship.
