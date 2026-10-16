@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import re
 from abc import ABC
 from datetime import datetime, timedelta, timezone
@@ -414,9 +414,14 @@ class BaseStream(ABC):
                         )
 
             if bookmark_key and current_max_bookmark:
-                self.write_bookmark(
-                    state, self.tap_stream_id, value=current_max_bookmark
-                )
+                # An unselected stream can still be synced here purely to reach a
+                # selected child (sync.py force-adds it) — it must not advance its
+                # own bookmark, or records never actually emitted get skipped if
+                # this stream is selected in a later run.
+                if self.is_selected():
+                    self.write_bookmark(
+                        state, self.tap_stream_id, value=current_max_bookmark
+                    )
 
                 if self.child_to_sync:
                     parent_bookmark_key = (

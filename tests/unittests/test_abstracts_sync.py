@@ -1,3 +1,4 @@
+import copy
 import unittest
 from unittest.mock import Mock, patch
 
@@ -244,6 +245,51 @@ class TestSync(unittest.TestCase):
                 stream.sync(state={}, transformer=transformer)
 
         self.assertEqual(observed["last_modified"], "2024-01-02T00:00:00.000000Z")
+
+    def test_unselected_pass_through_parent_does_not_write_own_bookmark(self):
+        """sync.py force-adds an unselected parent purely to reach a selected
+        child; that parent must not advance its own bookmark, or records it
+        never emitted get skipped if the parent is selected in a later run."""
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        catalog = type(
+            "FakeUnselectedCatalog",
+            (),
+            {
+                "schema": FakeCatalog.schema,
+                "stream": FakeCatalog.stream,
+                "tap_stream_id": FakeCatalog.tap_stream_id,
+                "key_properties": FakeCatalog.key_properties,
+                # Deep-copied so mutating "selected" below doesn't corrupt
+                # FakeCatalog.metadata, which is shared class-level state.
+                "metadata": copy.deepcopy(FakeCatalog.metadata),
+            },
+        )
+        catalog.metadata[0]["metadata"]["selected"] = False
+        stream = DynamicStream(client=client, catalog=catalog())
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        state = {}
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record") as write_record_patch:
+            stream.sync(state=state, transformer=transformer)
+
+        write_record_patch.assert_not_called()
+        self.assertNotIn(
+            "per_person",
+            state.get("bookmarks", {}),
+            "Unselected pass-through parent must not write its own bookmark",
+        )
 
 
 # ---------------------------------------------------------------------------
