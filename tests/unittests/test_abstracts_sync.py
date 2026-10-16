@@ -247,6 +247,96 @@ class TestSync(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# effective_bookmark caching across repeated sync() invocations (regression:
+# a child stream is re-synced once per parent record within a single run —
+# the bookmark captured at the start of that run must stay frozen across all
+# of those calls, not drift as each call's own write_bookmark advances state)
+# ---------------------------------------------------------------------------
+
+class TestEffectiveBookmarkCaching(unittest.TestCase):
+
+    def test_effective_bookmark_reused_across_repeated_sync_calls(self):
+        """A later sync() call on the same instance must reuse the bookmark
+        captured by the first call, not a value state was advanced to meanwhile."""
+        client = _client()
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        state = {}
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        written = []
+
+        # First call advances the bookmark far ahead of start_date.
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-06-01T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=lambda sid, rec, **_: written.append(rec),
+        ):
+            stream.sync(state=state, transformer=transformer)
+
+        self.assertEqual(
+            state["bookmarks"]["per_person"]["lastModifiedDateTime"],
+            "2024-06-01T00:00:00.000000Z",
+        )
+
+        # Second call (e.g. the same child instance re-synced for the next
+        # parent record) sees a record dated BEFORE the now-advanced state
+        # bookmark but AFTER the original start_date. It must still pass,
+        # because the comparison bookmark has to stay pinned to the value
+        # captured before the first call wrote — not state's current value.
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "2",
+                        "lastModifiedDateTime": "2024-03-01T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=lambda sid, rec, **_: written.append(rec),
+        ):
+            stream.sync(state=state, transformer=transformer)
+
+        self.assertEqual(
+            len(written),
+            2,
+            "Second record must still be written — effective_bookmark must "
+            "not silently re-derive from the already-advanced state bookmark",
+        )
+
+    def test_effective_bookmark_not_reset_after_sync_returns(self):
+        """effective_bookmark must remain cached after sync() completes so
+        subsequent calls (e.g. repeated child syncs within one parent loop)
+        reuse it instead of recomputing from state."""
+        client = _client()
+        client.get.return_value = {"d": {"results": [], "__next": None}}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        transformer = Mock()
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                stream.sync(state={}, transformer=transformer)
+
+        self.assertIsNotNone(
+            stream.effective_bookmark,
+            "effective_bookmark must stay cached after sync() returns",
+        )
+
+
+# ---------------------------------------------------------------------------
 # modify_object unit tests
 # ---------------------------------------------------------------------------
 

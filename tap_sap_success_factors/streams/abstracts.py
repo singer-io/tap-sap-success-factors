@@ -350,19 +350,24 @@ class BaseStream(ABC):
     def sync(self, state: Dict, transformer: Transformer, parent_obj: Dict = None) -> int:
         """Sync stream records and children streams."""
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
-        bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
 
-        if bookmark_key and self.child_to_sync:
-            parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
-            for child in self.child_to_sync:
-                child_bookmark = self.get_bookmark(
-                    state,
-                    child.tap_stream_id,
-                    key=parent_bookmark_key,
-                )
-                bookmark = min(bookmark, child_bookmark) if bookmark else child_bookmark
+        if self.effective_bookmark:
+            bookmark = self.effective_bookmark
+        else:
+            bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
 
-        self.effective_bookmark = bookmark
+            if bookmark_key and self.child_to_sync:
+                parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
+                for child in self.child_to_sync:
+                    child_bookmark = self.get_bookmark(
+                        state,
+                        child.tap_stream_id,
+                        key=parent_bookmark_key,
+                    )
+                    bookmark = min(bookmark, child_bookmark) if bookmark else child_bookmark
+
+            self.effective_bookmark = bookmark
+
         # Only advance from real records — do NOT pre-seed with start_date so
         # that 0-record syncs never write a spurious bookmark.
         current_max_bookmark = None
@@ -424,7 +429,5 @@ class BaseStream(ABC):
                             key=parent_bookmark_key,
                             value=current_max_bookmark,
                         )
-
-            self.effective_bookmark = None
 
             return counter.value
