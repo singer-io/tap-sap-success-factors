@@ -355,6 +355,71 @@ class TestSync(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Regression (GH PR #7 review): unselected pass-through parent must use its
+# selected child's saved checkpoint to drive progress, not fall back to
+# start_date forever just because its own bookmark write is suppressed.
+# ---------------------------------------------------------------------------
+
+class TestUnselectedParentBookmarkAlignment(unittest.TestCase):
+
+    def test_second_run_uses_child_checkpoint_not_start_date(self):
+        """Two sequential runs: per_person is unselected (pass-through only),
+        per_email is selected. Run 1 seeds per_email's saved checkpoint from
+        per_person's own newest record. Run 2 must query per_person using
+        that saved checkpoint — NOT start_date again — otherwise the parent
+        would re-fetch every historical record (and re-emit every child) on
+        every single run.
+        """
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2026-06-01T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        parent_stream = DynamicStream(
+            client=parent_client, catalog=FakeUnselectedParentCatalog()
+        )
+
+        child_client = _client()
+        child_client.get.return_value = {"d": {"results": [], "__next": None}}
+        child_stream = DynamicStream(client=child_client, catalog=FakeEmailChildCatalog())
+        parent_stream.child_to_sync = [child_stream]
+
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+
+        state = {}
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            parent_stream.sync(state=state, transformer=transformer)  # run 1
+            _, run1_kwargs = parent_client.get.call_args
+            parent_stream.sync(state=state, transformer=transformer)  # run 2
+            _, run2_kwargs = parent_client.get.call_args
+
+        # Run 1: nothing saved yet, so both own + child bookmark default to
+        # config start_date (2024-01-01).
+        self.assertIn("2024-01-01", run1_kwargs["params"]["$filter"])
+
+        # per_person's own bookmark must remain unwritten (unselected)...
+        self.assertNotIn("per_person", state.get("bookmarks", {}))
+        # ...while per_email's saved checkpoint advances to the newest
+        # per_person record seen.
+        self.assertEqual(
+            state["bookmarks"]["per_email"]["per_person_lastModifiedDateTime"],
+            "2026-06-01T00:00:00.000000Z",
+        )
+
+        # Run 2 must use that saved checkpoint, not fall back to start_date.
+        self.assertIn("2026-06-01", run2_kwargs["params"]["$filter"])
+        self.assertNotIn("2024-01-01", run2_kwargs["params"]["$filter"])
+
+
+# ---------------------------------------------------------------------------
 # Regression: INCREMENTAL child streams must not drop stale-but-valid records
 # ---------------------------------------------------------------------------
 

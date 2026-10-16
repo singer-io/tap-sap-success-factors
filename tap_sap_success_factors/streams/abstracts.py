@@ -354,10 +354,20 @@ class BaseStream(ABC):
         # change (see test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call).
         bookmark = (
             self.get_bookmark(state, self.tap_stream_id)
-            if bookmark_key and not is_parent_scoped_fetch
+            if bookmark_key and not is_parent_scoped_fetch and self.is_selected()
             else None
         )
 
+        # When this stream is unselected and only running to reach a selected
+        # child (see is_selected() guard on the bookmark write below), its own
+        # bookmark is deliberately never persisted — it would otherwise always
+        # read back as start_date. Including that frozen start_date in the
+        # min() below would permanently win over the child's real, advancing
+        # checkpoint (e.g. per_person forever re-querying from start_date even
+        # though per_email's saved checkpoint moved to 2026-06-01), forcing a
+        # full historical re-fetch — and re-emission of its children — on
+        # every run. Leaving `bookmark` as None here lets the child's
+        # checkpoint alone seed it in the loop below instead.
         if bookmark_key and self.child_to_sync and not is_parent_scoped_fetch:
             parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
             for child in self.child_to_sync:
