@@ -1,3 +1,4 @@
+import re
 import unittest
 from unittest.mock import Mock, patch
 
@@ -514,6 +515,107 @@ class TestIncrementalChildSync(unittest.TestCase):
             state.setdefault("bookmarks", {}).setdefault("per_email", {})[
                 "per_person_lastModifiedDateTime"
             ] = "2026-01-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end proof: reproduces the exact shape of support case 00481070.
+# A fake SAP OData backend enforces BOTH filters a request carries (parent +
+# date), exactly like the real server does, so these tests fail on the old
+# (pre-fix) code and pass on the current code — proving the fix, not just
+# the implementation detail.
+# ---------------------------------------------------------------------------
+
+def _fake_sap_odata(records_by_person, start_date="2024-01-01T00:00:00.000000Z"):
+    """Build a client.get side_effect that behaves like the real SAP server:
+    it honors whatever $filter clauses are actually sent, rather than always
+    returning a fixed response regardless of the request.
+    """
+
+    def _get(_path, params=None):
+        filt = (params or {}).get("$filter", "")
+        match = re.search(r"personIdExternal eq '([^']+)'", filt)
+        person_id = match.group(1) if match else None
+        rows = list(records_by_person.get(person_id, []))
+
+        # The real bug: when a date clause is ALSO present, SAP applies it
+        # too, excluding any row whose own lastModifiedDateTime predates it.
+        if "lastModifiedDateTime ge" in filt:
+            rows = [r for r in rows if r["lastModifiedDateTime"] >= start_date]
+
+        return {"d": {"results": rows, "__next": None}}
+
+    return _get
+
+
+class TestOriginalBugEndToEnd(unittest.TestCase):
+
+    def test_all_child_records_recovered_regardless_of_their_own_age(self):
+        """Reproduces support case 00481070 at small scale: 5 per_person
+        records (all recently touched, so they pass per_person's own
+        bookmark), each with exactly one per_email record. 4 of those 5
+        emails are old (created long before start_date and never modified
+        again — the realistic, common case for this entity). Before the
+        fix, combining per_email's own date filter with the parent filter
+        meant only the 1 recently-touched email ever came back from SAP —
+        a ~20% recovery rate here, matching the ~6-of-2,183 (~0.3%) seen in
+        production. After the fix, all 5 must be recovered.
+        """
+        person_ids = ["P1", "P2", "P3", "P4", "P5"]
+        emails_by_person = {
+            "P1": [{"personIdExternal": "P1", "lastModifiedDateTime": "2015-03-01T00:00:00.000000Z"}],
+            "P2": [{"personIdExternal": "P2", "lastModifiedDateTime": "2016-07-01T00:00:00.000000Z"}],
+            "P3": [{"personIdExternal": "P3", "lastModifiedDateTime": "2017-11-01T00:00:00.000000Z"}],
+            "P4": [{"personIdExternal": "P4", "lastModifiedDateTime": "2018-09-01T00:00:00.000000Z"}],
+            "P5": [{"personIdExternal": "P5", "lastModifiedDateTime": "2026-02-01T00:00:00.000000Z"}],
+        }
+
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": pid,
+                        "lastModifiedDateTime": "2026-01-01T00:00:00.000000Z",
+                    }
+                    for pid in person_ids
+                ],
+                "__next": None,
+            }
+        }
+        parent_stream = DynamicStream(client=parent_client, catalog=FakeCatalog())
+
+        child_client = _client()
+        child_client.get.side_effect = _fake_sap_odata(emails_by_person)
+        child_stream = DynamicStream(client=child_client, catalog=FakeEmailChildCatalog())
+        parent_stream.child_to_sync = [child_stream]
+
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        written = {"per_person": [], "per_email": []}
+
+        def _capture(stream_id, record, **_):
+            written[stream_id].append(record)
+
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=_capture,
+        ):
+            parent_stream.sync(state={}, transformer=transformer)
+
+        self.assertEqual(len(written["per_person"]), 5, "all 5 persons must sync")
+        self.assertEqual(
+            sorted(r["personIdExternal"] for r in written["per_email"]),
+            person_ids,
+            "all 5 emails must be recovered, including the 4 old/untouched ones "
+            "— this is the exact data-loss pattern from support case 00481070",
+        )
+
+        # Confirm *how* it's fixed: no outbound per_email request ever
+        # carried a date filter (only the parent filter), which is why the
+        # fake SAP backend above never excluded the old rows.
+        for call in child_client.get.call_args_list:
+            _, kwargs = call
+            self.assertNotIn("lastModifiedDateTime", kwargs["params"]["$filter"])
 
 
 # ---------------------------------------------------------------------------
