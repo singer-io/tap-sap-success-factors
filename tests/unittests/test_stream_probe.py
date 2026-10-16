@@ -1,5 +1,6 @@
 """Unit tests for tap_sap_success_factors.stream_probe."""
 import unittest
+from threading import Barrier
 from unittest.mock import MagicMock, Mock, patch
 
 import requests
@@ -453,7 +454,7 @@ class TestProbeAllStreams(unittest.TestCase):
         )
 
     @patch("tap_sap_success_factors.stream_probe.probe_stream")
-    def test_direct_probe_excludes_stream_when_expansion_is_rejected(
+    def test_direct_probe_retains_stream_when_expansion_is_rejected(
         self, mock_probe
     ):
         def _reject_expansion(auth, base, name, path, extra_params=None):
@@ -479,10 +480,16 @@ class TestProbeAllStreams(unittest.TestCase):
 
         excluded = probe_all_streams(client, stream_defs)
 
-        self.assertEqual(excluded, {"person"})
+        self.assertEqual(excluded, set())
         self.assertEqual(
-            mock_probe.call_args[0][4]["$expand"], "emailTypeNav"
+            mock_probe.call_args_list[0][0][4]["$expand"], "emailTypeNav"
         )
+        self.assertIsNone(mock_probe.call_args_list[1][0][4])
+        self.assertEqual(
+            stream_defs["person"]["rejected_flatten_nav_properties"],
+            ["emailTypeNav"],
+        )
+        self.assertEqual(stream_defs["person"]["flatten_nav_properties"], [])
 
     @patch("tap_sap_success_factors.stream_probe.probe_stream")
     def test_child_probe_detects_rejected_expansion_with_control_request(
@@ -511,13 +518,132 @@ class TestProbeAllStreams(unittest.TestCase):
 
         excluded = probe_all_streams(client, stream_defs)
 
-        self.assertEqual(excluded, {"child"})
+        self.assertEqual(excluded, set())
         self.assertEqual(mock_probe.call_count, 2)
         expanded_params = mock_probe.call_args_list[0][0][4]
         control_params = mock_probe.call_args_list[1][0][4]
         self.assertEqual(expanded_params["$expand"], "statusNav")
         self.assertNotIn("$expand", control_params)
         self.assertEqual(control_params["$filter"], "parentId eq 'testuser'")
+        self.assertEqual(
+            stream_defs["child"]["rejected_flatten_nav_properties"],
+            ["statusNav"],
+        )
+        self.assertEqual(stream_defs["child"]["flatten_nav_properties"], [])
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_rejected_probe_expansions_are_isolated_per_navigation(
+        self, mock_probe
+    ):
+        def _side_effect(auth, base, name, path, extra_params=None):
+            expansion = (extra_params or {}).get("$expand")
+            if expansion == "unsupportedNav":
+                status = 403
+            elif expansion == "supportedNav":
+                status = 200
+            else:
+                status = 400 if expansion else 200
+            return {
+                "stream": name,
+                "status": status,
+                "error": "rejected" if status >= 400 else None,
+            }
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = {
+            "person": {
+                "path": "/odata/v2/Person",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "replication_keys": [],
+                "flatten_nav_properties": ["unsupportedNav", "supportedNav"],
+            }
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+        self.assertEqual(
+            stream_defs["person"]["rejected_flatten_nav_properties"],
+            ["unsupportedNav"],
+        )
+        self.assertEqual(
+            stream_defs["person"]["flatten_nav_properties"], ["supportedNav"]
+        )
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_combined_success_retains_supported_navs_when_one_is_rejected(
+        self, mock_probe
+    ):
+        def _side_effect(auth, base, name, path, extra_params=None):
+            expansion = (extra_params or {}).get("$expand")
+            if expansion == "unsupportedNav":
+                status = 403
+            elif expansion in (
+                "supportedNavA",
+                "supportedNavB",
+                "supportedNavA,supportedNavB",
+            ):
+                status = 200
+            else:
+                status = 400 if expansion else 200
+            return {
+                "stream": name,
+                "status": status,
+                "error": "rejected" if status >= 400 else None,
+            }
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = {
+            "person": {
+                "path": "/odata/v2/Person",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "replication_keys": [],
+                "flatten_nav_properties": [
+                    "unsupportedNav",
+                    "supportedNavA",
+                    "supportedNavB",
+                ],
+            }
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+        self.assertEqual(
+            stream_defs["person"]["rejected_flatten_nav_properties"],
+            ["unsupportedNav"],
+        )
+        self.assertEqual(
+            stream_defs["person"]["flatten_nav_properties"],
+            ["supportedNavA", "supportedNavB"],
+        )
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_fallback_base_probes_run_concurrently(self, mock_probe):
+        controls = Barrier(2)
+
+        def _side_effect(auth, base, name, path, extra_params=None):
+            if (extra_params or {}).get("$expand"):
+                return {"stream": name, "status": 400, "error": "rejected"}
+            controls.wait(timeout=5)
+            return {"stream": name, "status": 200, "error": None}
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = self._stream_defs(["first", "second"])
+        for stream_def in stream_defs.values():
+            stream_def["flatten_nav_properties"] = ["lookupNav"]
+
+        excluded = probe_all_streams(client, stream_defs, max_workers=2)
+
+        self.assertEqual(excluded, set())
+        self.assertFalse(controls.broken)
 
     @patch("tap_sap_success_factors.stream_probe.probe_stream")
     def test_child_403_is_excluded(self, mock_probe):

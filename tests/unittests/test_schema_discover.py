@@ -785,6 +785,55 @@ class TestFlattenNavProperties(unittest.TestCase):
             ["emailTypeNav"],
         )
 
+    def test_lookup_target_does_not_need_a_standalone_entity_set(self):
+        xml = self.EDMX.replace(
+            '        <EntitySet Name="PicklistOption" EntityType="SFOData.PicklistOption"/>\n',
+            "",
+        )
+
+        schemas, _, stream_defs = discover_dynamic_streams(_client(xml))
+
+        self.assertNotIn("picklist_option", schemas)
+        self.assertIn(
+            "emailTypeNav_externalCode",
+            schemas["per_email"]["properties"],
+        )
+        self.assertEqual(
+            stream_defs["per_email"]["flatten_nav_properties"],
+            ["emailTypeNav"],
+        )
+
+    def test_discovery_retains_stream_and_marks_rejected_lookup_unsupported(self):
+        def reject_lookup_expansion(_client, stream_defs):
+            stream_def = stream_defs["per_email"]
+            stream_def["flatten_nav_properties"] = []
+            stream_def["rejected_flatten_nav_properties"] = ["emailTypeNav"]
+            return set()
+
+        with patch(
+            "tap_sap_success_factors.discover.probe_all_streams",
+            side_effect=reject_lookup_expansion,
+        ):
+            catalog = discover(_client(self.EDMX))
+
+        per_email = next(
+            stream for stream in catalog.streams
+            if stream.tap_stream_id == "per_email"
+        )
+        metadata_by_breadcrumb = {
+            tuple(entry["breadcrumb"]): entry["metadata"]
+            for entry in per_email.metadata
+        }
+        self.assertIn("emailTypeNav_externalCode", per_email.schema.to_dict()["properties"])
+        self.assertEqual(
+            metadata_by_breadcrumb[("properties", "emailTypeNav_externalCode")]["inclusion"],
+            "unsupported",
+        )
+        self.assertEqual(
+            metadata_by_breadcrumb[()]["tap-sap-success-factors.flatten-nav-properties"],
+            [],
+        )
+
     def test_parent_link_nav_is_not_flattened(self):
         """personNav resolves this stream's parent relationship, so it must
         be excluded from flattening (would duplicate the parent record)."""

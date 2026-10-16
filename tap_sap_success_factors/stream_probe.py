@@ -1,9 +1,9 @@
 """stream_probe.py — Discovery-time probing to exclude unsupported streams.
 
 Each entity set is probed with a minimal ``$top=1`` request immediately after
-EDMX metadata discovery.  Streams that return any 4xx or 5xx HTTP status are
-logged and removed from the catalog before it is emitted so downstream
-connectors never attempt to sync data from endpoints that SAP rejects.
+EDMX metadata discovery. Unreadable streams are removed from the catalog;
+rejected optional navigation expansions disable only their flattened fields
+when the base entity remains readable.
 
 Design decisions
 ----------------
@@ -11,9 +11,12 @@ Design decisions
   - Probes are thread-safe — each worker creates its own connection.
   - No backoff/retry decorators delay threads on expected 400s.
   - Raw HTTP status codes are visible without ``raise_for_error`` masking.
-* Any 4xx or 5xx response is treated as a permanent exclusion.
-  Network errors and timeouts are logged as warnings but the stream is kept
-  in the catalog (conservative / non-destructive default).
+* Direct base-query 4xx/5xx responses and child 403/5xx or known-unqueryable
+    400 responses exclude the stream. Network errors and timeouts are logged as
+    warnings but the stream is kept in the catalog.
+* If a request with optional navigation expansions fails, the base query and
+    each navigation are probed separately. A readable base stream is retained;
+    rejected navigation fields are marked unsupported before catalog emission.
 * Parallelism via ``concurrent.futures.ThreadPoolExecutor``; default 20 workers
   probes 466 streams in roughly 30 s wall-clock time on typical SAP instances.
 
@@ -27,7 +30,8 @@ are not falsely excluded because they require a mandatory filter:
   configured username as a real (if minimal) filter value allows SAP to
   evaluate the full permission chain, so HTTP 403 (permission / feature
   block) is returned instead of HTTP 400 ("field cannot be null").
-  All 4xx/5xx responses are excluded, same as direct streams.
+    HTTP 403/5xx and known-unqueryable 400 responses are excluded; other 400s
+    are treated as possible filter-value false positives.
 * **INCREMENTAL streams** (have ``replication_keys``) — probed with
   ``$filter=<rep_key> ge datetime'<start_date>'`` mirroring the sync filter.
 * **Expand-only streams** (have ``expand_parent_entity_set``) — skipped.
@@ -39,7 +43,7 @@ are not falsely excluded because they require a mandatory filter:
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import backoff
 import requests
@@ -191,6 +195,15 @@ def _extract_odata_error_code(error_text):
         return ""
 
 
+def _probe_result_excludes_stream(result: Dict, is_child: bool) -> bool:
+    status = result["status"]
+    if is_child and status == 400:
+        return _extract_odata_error_code(
+            result.get("error") or ""
+        ) in _CHILD_GENUINE_400_CODES
+    return status is not None and 400 <= status <= 599
+
+
 def probe_all_streams(
     client,
     stream_defs: Dict,
@@ -198,10 +211,11 @@ def probe_all_streams(
 ) -> Set[str]:
     """Probe every stream in *stream_defs* in parallel; return excluded names.
 
-    Each stream is probed via :func:`probe_stream`.  Streams whose endpoint
-    returns any 4xx or 5xx HTTP status are added to the returned ``excluded``
-    set.  Network errors and timeouts are logged but do **not** result in
-    exclusion — the stream stays in the catalog.
+    Each stream is probed via :func:`probe_stream`. Unreadable base endpoints
+    are returned in ``excluded``. If optional navigation expansions fail but
+    the base request succeeds, the stream is retained and its
+    ``stream_def`` is updated with supported and rejected navigation lists.
+    Network errors and timeouts do **not** result in exclusion.
 
     Parameters
     ----------
@@ -218,7 +232,7 @@ def probe_all_streams(
     Returns
     -------
     set[str]
-        Snake-case stream names that returned any 4xx or 5xx status and should
+        Snake-case stream names whose base endpoint is not queryable and should
         be excluded from the emitted catalog.
     """
     auth_header = client.get_auth_header()
@@ -230,7 +244,7 @@ def probe_all_streams(
     #   probeable       — direct query streams (all non-child, non-expand).
     #   child_probeable — child streams probed with a config-username filter
     #                     so SAP evaluates the full permission chain.
-    #                     All 4xx/5xx excluded (same rule as direct streams).
+    #                     403/5xx and known-unqueryable 400s are excluded.
     #   skipped_expand  — expand-only streams; direct queries always fail.
     probeable: Dict[str, Dict] = {}
     child_probeable: Dict[str, Dict] = {}
@@ -262,9 +276,8 @@ def probe_all_streams(
     )
 
     excluded: Set[str] = set()
-    # futures maps future → (stream_name, is_child)
     futures: Dict = {}
-    child_probe_params: Dict[str, Dict] = {}
+    initial_results: Dict[str, Dict] = {}
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for stream_name, stream_def in probeable.items():
@@ -280,19 +293,20 @@ def probe_all_streams(
                         f"{rep_key} ge datetime'{start_date}'"
                     )
                 }
+            base_params = dict(extra_params or {})
             flatten_navs = stream_def.get("flatten_nav_properties") or []
+            request_params = dict(base_params)
             if flatten_navs:
-                extra_params = extra_params or {}
-                extra_params["$expand"] = ",".join(flatten_navs)
+                request_params["$expand"] = ",".join(flatten_navs)
             future = executor.submit(
                 probe_stream,
                 auth_header,
                 base_url,
                 stream_name,
                 stream_def["path"],
-                extra_params,
+                request_params or None,
             )
-            futures[future] = (stream_name, False)
+            futures[future] = (stream_name, False, flatten_navs, base_params)
 
         for stream_name, stream_def in child_probeable.items():
             # Probe with a type-appropriate filter value so SAP evaluates
@@ -305,11 +319,11 @@ def probe_all_streams(
             pff = stream_def["parent_filter_field"]
             pff_schema = stream_def.get("parent_filter_field_schema", {})
             filter_clause = _probe_filter_value(pff_schema, username)
-            child_filter = {"$filter": f"{pff} {filter_clause}"}
+            base_params = {"$filter": f"{pff} {filter_clause}"}
             flatten_navs = stream_def.get("flatten_nav_properties") or []
+            child_filter = dict(base_params)
             if flatten_navs:
                 child_filter["$expand"] = ",".join(flatten_navs)
-            child_probe_params[stream_name] = child_filter
             future = executor.submit(
                 probe_stream,
                 auth_header,
@@ -318,81 +332,19 @@ def probe_all_streams(
                 stream_def["path"],
                 child_filter,
             )
-            futures[future] = (stream_name, True)
+            futures[future] = (stream_name, True, flatten_navs, base_params)
 
         done_count = 0
         for future in as_completed(futures):
             result = future.result()
-            stream_name, is_child = futures[future]
+            stream_name, is_child, flatten_navs, base_params = futures[future]
+            initial_results[stream_name] = {
+                "result": result,
+                "is_child": is_child,
+                "flatten_navs": flatten_navs,
+                "base_params": base_params,
+            }
             done_count += 1
-
-            status = result["status"]
-            # Direct streams: exclude all 4xx/5xx.
-            # Child streams: exclude 403/5xx unconditionally; exclude 400
-            # only for COE0003 (field not filterable) and COE0025 (stream
-            # not queryable) — these will always fail at sync time too.
-            # All other child 400s are false positives (type-precision
-            # mismatches, value-not-found) that work with real parent keys.
-            if is_child and status == 400:
-                error_code = _extract_odata_error_code(
-                    result.get("error") or ""
-                )
-                is_excluded = error_code in _CHILD_GENUINE_400_CODES
-                if (
-                    not is_excluded
-                    and stream_defs[stream_name].get("flatten_nav_properties")
-                ):
-                    control_params = dict(child_probe_params[stream_name])
-                    control_params.pop("$expand", None)
-                    control_result = probe_stream(
-                        auth_header,
-                        base_url,
-                        stream_name,
-                        stream_defs[stream_name]["path"],
-                        control_params,
-                    )
-                    control_status = control_result["status"]
-                    if control_status == 400:
-                        control_code = _extract_odata_error_code(
-                            control_result.get("error") or ""
-                        )
-                        is_excluded = (
-                            control_code in _CHILD_GENUINE_400_CODES
-                        )
-                    else:
-                        is_excluded = (
-                            control_status is not None
-                            and 400 <= control_status <= 599
-                        )
-                    if control_status is not None and 200 <= control_status < 300:
-                        is_excluded = True
-            else:
-                is_excluded = (
-                    status is not None and 400 <= status <= 599
-                )
-            if is_excluded:
-                LOGGER.warning(
-                    "[Probe] Excluding%s stream '%s' — HTTP %s: %s",
-                    " child" if is_child else "",
-                    result["stream"],
-                    result["status"],
-                    result["error"],
-                )
-                excluded.add(result["stream"])
-            elif result["status"] is None:
-                LOGGER.warning(
-                    "[Probe] Stream '%s' probe failed (network/timeout) — "
-                    "keeping in catalog. Error: %s",
-                    result["stream"],
-                    result["error"],
-                )
-            else:
-                LOGGER.debug(
-                    "[Probe] Stream '%s' → HTTP %s",
-                    result["stream"],
-                    result["status"],
-                )
-
             if done_count % 50 == 0 or done_count == total:
                 LOGGER.info(
                     "[Probe] Progress: %d/%d probes completed "
@@ -401,6 +353,160 @@ def probe_all_streams(
                     total,
                     len(excluded),
                 )
+
+        control_futures: Dict = {}
+        final_results: Dict[str, Dict] = {}
+        for stream_name, probe_data in initial_results.items():
+            result = probe_data["result"]
+            status = result["status"]
+            flatten_navs = probe_data["flatten_navs"]
+            if flatten_navs and status is not None and 400 <= status <= 599:
+                control_future = executor.submit(
+                    probe_stream,
+                    auth_header,
+                    base_url,
+                    stream_name,
+                    stream_defs[stream_name]["path"],
+                    probe_data["base_params"] or None,
+                )
+                control_futures[control_future] = (stream_name, probe_data)
+            else:
+                final_results[stream_name] = {
+                    "result": result,
+                    "is_child": probe_data["is_child"],
+                }
+
+        isolation_futures: Dict = {}
+        isolation_data: Dict[str, Dict] = {}
+        for future in as_completed(control_futures):
+            control_result = future.result()
+            stream_name, probe_data = control_futures[future]
+            final_results[stream_name] = {
+                "result": control_result,
+                "is_child": probe_data["is_child"],
+            }
+            if not (
+                control_result["status"] is not None
+                and 200 <= control_result["status"] < 300
+            ):
+                continue
+
+            flatten_navs = probe_data["flatten_navs"]
+            if len(flatten_navs) == 1:
+                rejected_navs = flatten_navs
+                stream_def = stream_defs[stream_name]
+                stream_def["rejected_flatten_nav_properties"] = rejected_navs
+                stream_def["flatten_nav_properties"] = []
+                LOGGER.warning(
+                    "[Probe] Keeping stream '%s' but disabling rejected "
+                    "navigation expansion '%s'.",
+                    stream_name,
+                    rejected_navs[0],
+                )
+                continue
+
+            isolation_data[stream_name] = probe_data
+            for nav_name in flatten_navs:
+                nav_params = dict(probe_data["base_params"])
+                nav_params["$expand"] = nav_name
+                nav_future = executor.submit(
+                    probe_stream,
+                    auth_header,
+                    base_url,
+                    stream_name,
+                    stream_defs[stream_name]["path"],
+                    nav_params,
+                )
+                isolation_futures[nav_future] = (stream_name, nav_name)
+
+        isolated_navs: Dict[str, List[str]] = {
+            stream_name: [] for stream_name in isolation_data
+        }
+        for future in as_completed(isolation_futures):
+            result = future.result()
+            stream_name, nav_name = isolation_futures[future]
+            status = result["status"]
+            if status is None or not 400 <= status <= 599:
+                isolated_navs[stream_name].append(nav_name)
+
+        combined_futures: Dict = {}
+        for stream_name, probe_data in isolation_data.items():
+            supported_navs = [
+                nav for nav in probe_data["flatten_navs"]
+                if nav in isolated_navs[stream_name]
+            ]
+            if len(supported_navs) <= 1:
+                rejected_navs = [
+                    nav for nav in probe_data["flatten_navs"]
+                    if nav not in supported_navs
+                ]
+                stream_def = stream_defs[stream_name]
+                stream_def["rejected_flatten_nav_properties"] = rejected_navs
+                stream_def["flatten_nav_properties"] = supported_navs
+                continue
+
+            combined_params = dict(probe_data["base_params"])
+            combined_params["$expand"] = ",".join(supported_navs)
+            combined_future = executor.submit(
+                probe_stream,
+                auth_header,
+                base_url,
+                stream_name,
+                stream_defs[stream_name]["path"],
+                combined_params,
+            )
+            combined_futures[combined_future] = (
+                stream_name,
+                probe_data,
+                supported_navs,
+            )
+
+        for future in as_completed(combined_futures):
+            result = future.result()
+            stream_name, probe_data, supported_navs = combined_futures[future]
+            combined_status = result["status"]
+            combined_rejected = (
+                combined_status is not None
+                and 400 <= combined_status <= 599
+            )
+            rejected_navs = (
+                probe_data["flatten_navs"]
+                if combined_rejected
+                else [
+                    nav for nav in probe_data["flatten_navs"]
+                    if nav not in supported_navs
+                ]
+            )
+            stream_def = stream_defs[stream_name]
+            stream_def["rejected_flatten_nav_properties"] = rejected_navs
+            stream_def["flatten_nav_properties"] = (
+                [] if combined_rejected else supported_navs
+            )
+
+    for stream_name, probe_data in final_results.items():
+        result = probe_data["result"]
+        if _probe_result_excludes_stream(result, probe_data["is_child"]):
+            LOGGER.warning(
+                "[Probe] Excluding%s stream '%s' — HTTP %s: %s",
+                " child" if probe_data["is_child"] else "",
+                result["stream"],
+                result["status"],
+                result["error"],
+            )
+            excluded.add(result["stream"])
+        elif result["status"] is None:
+            LOGGER.warning(
+                "[Probe] Stream '%s' probe failed (network/timeout) — "
+                "keeping in catalog. Error: %s",
+                result["stream"],
+                result["error"],
+            )
+        else:
+            LOGGER.debug(
+                "[Probe] Stream '%s' → HTTP %s",
+                result["stream"],
+                result["status"],
+            )
 
     LOGGER.info(
         "Discovery probe complete: %d/%d streams excluded "

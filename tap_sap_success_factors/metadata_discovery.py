@@ -801,8 +801,7 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
 
             target_type = target_end.get("type")
             target_entity_data = entity_types.get(target_type)
-            target_set_name = entity_type_to_set.get(target_type)
-            if not target_entity_data or not target_set_name:
+            if not target_entity_data:
                 continue
 
             properties.pop(nav_name, None)
