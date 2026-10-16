@@ -340,6 +340,18 @@ class BaseStream(ABC):
         is_parent_scoped_fetch = bool(parent_obj and self.parent_filter_field)
 
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
+        # This stream instance is reused across every parent record (e.g.
+        # per_email.sync() runs once per per_person record — ~2,183 times for
+        # a typical tenant), so caching `bookmark` across calls may look like
+        # a worthwhile optimization. It isn't needed: when is_parent_scoped_fetch
+        # is True this ternary already short-circuits to None WITHOUT calling
+        # get_bookmark()/touching `state`, so there is nothing expensive here
+        # to cache on the hot path. A naive `if self.effective_bookmark: reuse
+        # else: compute` cache would also be fragile long-term — None is both
+        # the valid "no filter applies" result AND the "not computed yet"
+        # sentinel, so it would silently recompute every call anyway today,
+        # but could serve a stale value if this method's invariants ever
+        # change (see test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call).
         bookmark = (
             self.get_bookmark(state, self.tap_stream_id)
             if bookmark_key and not is_parent_scoped_fetch

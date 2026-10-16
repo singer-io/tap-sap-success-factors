@@ -413,6 +413,43 @@ class TestIncrementalChildSync(unittest.TestCase):
         _, kwargs = client.get.call_args
         self.assertEqual(kwargs["params"]["$filter"], "personIdExternal eq '1'")
 
+    def test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call(self):
+        """A child stream instance is reused across every parent record
+        (per_email.sync() runs once per per_person record — e.g. 2,183 times
+        for a typical tenant). This proves repeated calls on the SAME
+        instance, for DIFFERENT parents, never reuse a stale bookmark: each
+        call independently resolves to "no date filter" regardless of state
+        changes made between calls — so no cross-call caching of
+        effective_bookmark is needed (see the comment in sync() for why a
+        naive truthy-check cache would be unsafe to add here).
+        """
+        client = _client()
+        client.get.return_value = {"d": {"results": [], "__next": None}}
+        stream = DynamicStream(client=client, catalog=FakeEmailChildCatalog())
+        transformer = Mock()
+
+        state = {}
+        for person_id in ("1", "2", "3"):
+            stream.sync(
+                state=state,
+                transformer=transformer,
+                parent_obj={"personIdExternal": person_id},
+            )
+
+            _, kwargs = client.get.call_args
+            self.assertEqual(
+                kwargs["params"]["$filter"],
+                f"personIdExternal eq '{person_id}'",
+                f"call for parent '{person_id}' must only carry the parent filter",
+            )
+
+            # Simulate the parent (per_person) advancing its own bookmark
+            # between per-parent child syncs — must have zero effect on how
+            # subsequent per_email requests are filtered.
+            state.setdefault("bookmarks", {}).setdefault("per_email", {})[
+                "per_person_lastModifiedDateTime"
+            ] = "2026-01-01T00:00:00Z"
+
 
 # ---------------------------------------------------------------------------
 # modify_object unit tests
