@@ -479,15 +479,17 @@ class TestIncrementalChildSync(unittest.TestCase):
         _, kwargs = client.get.call_args
         self.assertEqual(kwargs["params"]["$filter"], "personIdExternal eq '1'")
 
-    def test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call(self):
-        """A child stream instance is reused across every parent record
+    def test_no_bookmark_cache_regression_across_sequential_parent_calls(self):
+        """Guards against a caching bug that was proposed but never added: a
+        child stream instance is reused across every parent record
         (per_email.sync() runs once per per_person record — e.g. 2,183 times
-        for a typical tenant). This proves repeated calls on the SAME
-        instance, for DIFFERENT parents, never reuse a stale bookmark: each
-        call independently resolves to "no date filter" regardless of state
-        changes made between calls — so no cross-call caching of
-        effective_bookmark is needed (see the comment in sync() for why a
-        naive truthy-check cache would be unsafe to add here).
+        for a typical tenant). If `effective_bookmark` were cached across
+        those calls using a naive `if self.effective_bookmark: reuse` check,
+        a stale value could leak from one parent's call into the next one's
+        (None is indistinguishable from "not computed yet"). This proves
+        repeated calls on the SAME instance, for DIFFERENT parents, never
+        reuse a stale bookmark: each call independently resolves to "no date
+        filter" regardless of state changes made between calls.
         """
         client = _client()
         client.get.return_value = {"d": {"results": [], "__next": None}}

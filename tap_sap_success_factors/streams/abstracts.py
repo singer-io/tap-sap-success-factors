@@ -354,7 +354,7 @@ class BaseStream(ABC):
         is_parent_scoped_fetch = bool(parent_obj and self.parent_filter_field)
 
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
-        # Why NOT cache `bookmark` across calls (reviewer question):
+        # Why `bookmark` is NOT cached across calls:
         # - This instance is reused per parent record (e.g. per_email.sync()
         #   runs once per per_person record — ~2,183 times/tenant), so
         #   caching looks tempting here.
@@ -366,10 +366,10 @@ class BaseStream(ABC):
         #   result AND the "not computed yet" sentinel, so it would silently
         #   recompute every call anyway today, but could serve a stale value
         #   if this method's invariants ever change.
-        # - See test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call.
+        # - See test_no_bookmark_cache_regression_across_sequential_parent_calls.
         #
         # Why `and self.is_selected()` was added (see min() comment below for
-        # the regression this prevents):
+        # the data-loss bug this prevents):
         # - An unselected pass-through parent (e.g. per_person, added to
         #   streams_to_sync only to reach a selected per_email) never writes
         #   its own bookmark, so get_bookmark() for it would always default
@@ -381,7 +381,7 @@ class BaseStream(ABC):
             else None
         )
 
-        # Why `bookmark` must stay None here when unselected (PR review fix):
+        # Why `bookmark` must stay None here when unselected:
         # - When this stream is unselected and only running to reach a
         #   selected child (see is_selected() guard on the bookmark write
         #   further below), its own bookmark is deliberately never
