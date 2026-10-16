@@ -593,57 +593,6 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 break
 
         # ------------------------------------------------------------------
-        # Group 6: Flatten to-one (single-valued) NavigationProperty lookups
-        # inline instead of leaving them as inert string placeholders.
-        #
-        # SAP returns an OData deferred link for every Nav property that is
-        # not $expand-ed (e.g. {"__deferred": {"uri": ...}}).  Without this,
-        # the field is declared as a plain "string" in the schema, so
-        # singer.Transformer force-coerces that dict into its stringified
-        # repr — garbage data, not the related entity's fields.
-        #
-        # For every outbound Nav whose association target multiplicity is
-        # "0..1"/"1" (to-one) — excluding the one already used as this
-        # stream's parent-link and anything on BLOCKED_EXPAND_NAV_PROPERTIES
-        # — replace the placeholder with the target entity's own scalar
-        # properties, flattened as "<nav>_<field>".  The target's own
-        # NavigationProperties are left as one more level of
-        # "<nav>_<subNav>_deferred_uri" placeholders (not recursively
-        # flattened), mirroring Precog's one-level expand-and-flatten.
-        # ------------------------------------------------------------------
-        flatten_navs: List[str] = []
-        for nav in entity_navigations.get(entity_type, []):
-            nav_name = nav.get("name")
-            if not nav_name or nav_name == matched_nav_name:
-                continue
-            if nav_name in BLOCKED_EXPAND_NAV_PROPERTIES:
-                continue
-
-            assoc = associations.get(nav.get("relationship"))
-            if not assoc:
-                continue
-            target_end = assoc.get("ends", {}).get(nav.get("to_role"), {})
-            if target_end.get("multiplicity") not in ("0..1", "1"):
-                continue  # to-many: leave as the existing placeholder string
-
-            target_type = target_end.get("type")
-            target_entity_data = entity_types.get(target_type)
-            target_set_name = entity_type_to_set.get(target_type)
-            if not target_entity_data or not target_set_name:
-                continue
-
-            properties.pop(nav_name, None)
-            for sub_name, sub_schema in target_entity_data["properties"].items():
-                properties[f"{nav_name}_{sub_name}"] = dict(sub_schema)
-            for sub_nav in entity_navigations.get(target_type, []):
-                sub_nav_name = sub_nav.get("name")
-                if sub_nav_name:
-                    properties[f"{nav_name}_{sub_nav_name}_deferred_uri"] = {
-                        "type": ["null", "string"]
-                    }
-            flatten_navs.append(nav_name)
-
-        # ------------------------------------------------------------------
         # Group 4: Apply hardcoded parent overrides when EDMX inference could
         # not detect the relationship (e.g. no navigation property on child).
         # Guard: only apply the override when the declared parent is actually
@@ -828,6 +777,44 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                     parent_secondary_key_field = None
                     relationship_name = None
                     relationship_inference = None
+
+        # ------------------------------------------------------------------
+        # Group 6: Flatten to-one (single-valued) NavigationProperty lookups
+        # only after parent inference and compatibility validation. A nav
+        # initially considered a parent link is still a lookup if that
+        # relationship is later rejected.
+        # ------------------------------------------------------------------
+        flatten_navs: List[str] = []
+        for nav in entity_navigations.get(entity_type, []):
+            nav_name = nav.get("name")
+            if not nav_name or (nav_name == matched_nav_name and parent_stream):
+                continue
+            if nav_name in BLOCKED_EXPAND_NAV_PROPERTIES:
+                continue
+
+            assoc = associations.get(nav.get("relationship"))
+            if not assoc:
+                continue
+            target_end = assoc.get("ends", {}).get(nav.get("to_role"), {})
+            if target_end.get("multiplicity") not in ("0..1", "1"):
+                continue
+
+            target_type = target_end.get("type")
+            target_entity_data = entity_types.get(target_type)
+            target_set_name = entity_type_to_set.get(target_type)
+            if not target_entity_data or not target_set_name:
+                continue
+
+            properties.pop(nav_name, None)
+            for sub_name, sub_schema in target_entity_data["properties"].items():
+                properties[f"{nav_name}_{sub_name}"] = dict(sub_schema)
+            for sub_nav in entity_navigations.get(target_type, []):
+                sub_nav_name = sub_nav.get("name")
+                if sub_nav_name:
+                    properties[f"{nav_name}_{sub_nav_name}_deferred_uri"] = {
+                        "type": ["null", "string"]
+                    }
+            flatten_navs.append(nav_name)
 
         if parent_stream and parent_key_field:
             parent_entity_type = stream_to_entity_type.get(parent_stream)

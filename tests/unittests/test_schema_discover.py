@@ -540,12 +540,19 @@ class TestParentRelationshipTypeMismatch(unittest.TestCase):
     def test_type_mismatch_drops_when_rescue_fails(self):
         """When no type-compatible rescue field exists the relationship
         must be dropped (parent_stream set to None)."""
-        _, _, stream_defs = discover_dynamic_streams(
+        schemas, _, stream_defs = discover_dynamic_streams(
             _client(self.MISMATCH_NO_RESCUE_XML)
         )
         self.assertIsNone(
             stream_defs["child"]["parent_stream"],
             "Relationship must be dropped when rescue finds no compatible field",
+        )
+        self.assertIn("fooNav_code", schemas["child"]["properties"])
+        self.assertIn(
+            "fooNav_effectiveStartDate", schemas["child"]["properties"]
+        )
+        self.assertEqual(
+            stream_defs["child"]["flatten_nav_properties"], ["fooNav"]
         )
 
     # Mirrors the PickListValueV2 scenario: parent composite PK has

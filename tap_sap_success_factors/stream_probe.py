@@ -264,6 +264,7 @@ def probe_all_streams(
     excluded: Set[str] = set()
     # futures maps future → (stream_name, is_child)
     futures: Dict = {}
+    child_probe_params: Dict[str, Dict] = {}
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for stream_name, stream_def in probeable.items():
@@ -279,6 +280,10 @@ def probe_all_streams(
                         f"{rep_key} ge datetime'{start_date}'"
                     )
                 }
+            flatten_navs = stream_def.get("flatten_nav_properties") or []
+            if flatten_navs:
+                extra_params = extra_params or {}
+                extra_params["$expand"] = ",".join(flatten_navs)
             future = executor.submit(
                 probe_stream,
                 auth_header,
@@ -301,6 +306,10 @@ def probe_all_streams(
             pff_schema = stream_def.get("parent_filter_field_schema", {})
             filter_clause = _probe_filter_value(pff_schema, username)
             child_filter = {"$filter": f"{pff} {filter_clause}"}
+            flatten_navs = stream_def.get("flatten_nav_properties") or []
+            if flatten_navs:
+                child_filter["$expand"] = ",".join(flatten_navs)
+            child_probe_params[stream_name] = child_filter
             future = executor.submit(
                 probe_stream,
                 auth_header,
@@ -329,6 +338,34 @@ def probe_all_streams(
                     result.get("error") or ""
                 )
                 is_excluded = error_code in _CHILD_GENUINE_400_CODES
+                if (
+                    not is_excluded
+                    and stream_defs[stream_name].get("flatten_nav_properties")
+                ):
+                    control_params = dict(child_probe_params[stream_name])
+                    control_params.pop("$expand", None)
+                    control_result = probe_stream(
+                        auth_header,
+                        base_url,
+                        stream_name,
+                        stream_defs[stream_name]["path"],
+                        control_params,
+                    )
+                    control_status = control_result["status"]
+                    if control_status == 400:
+                        control_code = _extract_odata_error_code(
+                            control_result.get("error") or ""
+                        )
+                        is_excluded = (
+                            control_code in _CHILD_GENUINE_400_CODES
+                        )
+                    else:
+                        is_excluded = (
+                            control_status is not None
+                            and 400 <= control_status <= 599
+                        )
+                    if control_status is not None and 200 <= control_status < 300:
+                        is_excluded = True
             else:
                 is_excluded = (
                     status is not None and 400 <= status <= 599

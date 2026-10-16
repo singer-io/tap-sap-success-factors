@@ -87,6 +87,28 @@ class BaseStream(ABC):
         """Return whether stream is selected in catalog metadata."""
         return metadata.get(self.metadata, (), "selected")
 
+    def selected_flatten_nav_properties(self):
+        """Return expansions needed by selected fields on a selected stream."""
+        if not self.is_selected():
+            return []
+
+        schema_properties = self.schema.get("properties", {})
+        selected_navs = []
+        for nav_name in self.flatten_nav_properties:
+            nav_prefix = f"{nav_name}_"
+            for field_name in schema_properties:
+                if not field_name.startswith(nav_prefix):
+                    continue
+                breadcrumb = ("properties", field_name)
+                inclusion = metadata.get(self.metadata, breadcrumb, "inclusion")
+                selected = metadata.get(self.metadata, breadcrumb, "selected")
+                if inclusion == "automatic" or (
+                    inclusion != "unsupported" and selected is not False
+                ):
+                    selected_navs.append(nav_name)
+                    break
+        return selected_navs
+
     def build_params(self, state: Dict, parent_obj: Dict = None) -> Dict:
         """Build OData query params for stream fetch."""
         params: Dict[str, Any] = {}
@@ -98,8 +120,9 @@ class BaseStream(ABC):
         ):
             params["$orderby"] = ",".join(self.key_properties)
 
-        if self.flatten_nav_properties and not self.expand_nav_property:
-            params["$expand"] = ",".join(self.flatten_nav_properties)
+        flatten_navs = self.selected_flatten_nav_properties()
+        if flatten_navs and not self.expand_nav_property:
+            params["$expand"] = ",".join(flatten_navs)
 
         if self.replication_method == "INCREMENTAL" and self.replication_keys:
             key = self.replication_keys[0]

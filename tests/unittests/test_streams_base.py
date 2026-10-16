@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock
 
+from singer import metadata as singer_metadata
+
 from tap_sap_success_factors.streams.dynamic import DynamicStream
 
 
@@ -120,10 +122,68 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         client.config = {"start_date": "2024-01-01T00:00:00Z"}
         stream = DynamicStream(client=client, catalog=FakeCatalog())
         stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
 
         params = stream.build_params(state={})
 
         self.assertEqual(params["$expand"], "emailTypeNav")
+
+    def test_expand_omitted_when_flattened_fields_are_deselected(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+        stream.metadata = singer_metadata.write(
+            stream.metadata,
+            ("properties", "emailTypeNav_externalCode"),
+            "selected",
+            False,
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+    def test_expand_kept_when_any_flattened_field_is_selected(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"].update({
+            "emailTypeNav_externalCode": {"type": ["null", "string"]},
+            "emailTypeNav_status": {"type": ["null", "string"]},
+        })
+        stream.metadata = singer_metadata.write(
+            stream.metadata,
+            ("properties", "emailTypeNav_externalCode"),
+            "selected",
+            False,
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$expand"], "emailTypeNav")
+
+    def test_expand_omitted_for_unselected_dependency_stream(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+        stream.metadata = singer_metadata.write(
+            stream.metadata, (), "selected", False
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
 
     def test_expand_not_added_when_already_expand_nav_stream(self):
         """A stream fetched via the separate expand_nav_property path (Group
@@ -134,6 +194,9 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         stream = DynamicStream(client=client, catalog=FakeCatalog())
         stream.expand_nav_property = "permissionsNav"
         stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
 
         params = stream.build_params(state={})
 
