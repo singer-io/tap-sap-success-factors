@@ -351,7 +351,7 @@ class BaseStream(ABC):
         """Sync stream records and children streams."""
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
 
-        if self.effective_bookmark:
+        if self.effective_bookmark is not None:
             bookmark = self.effective_bookmark
         else:
             bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
