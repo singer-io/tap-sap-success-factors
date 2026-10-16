@@ -354,7 +354,11 @@ class BaseStream(ABC):
         if self.effective_bookmark is not None:
             bookmark = self.effective_bookmark
         else:
-            bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
+            bookmark = (
+                self.get_bookmark(state, self.tap_stream_id)
+                if bookmark_key and self.is_selected()
+                else None
+            )
 
         if bookmark_key and self.child_to_sync:
             parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
