@@ -95,15 +95,23 @@ class BaseStream(ABC):
         ):
             params["$orderby"] = ",".join(self.key_properties)
 
-        # When fetching a child's records for one specific parent (non-expand),
-        # never also apply the child's own replication-key date filter: child
-        # entities (e.g. PerEmail) are frequently never independently "touched"
-        # in SAP after creation, so their own lastModifiedDateTime predates the
-        # bookmark/start_date and combining both filters silently drops nearly
-        # all historical child records (only the few recently-touched ones pass).
-        # Completeness for these records is governed by the parent's bookmark
-        # (the parent decides whether to resync its children at all), not by
-        # the child's own unreliable timestamp.
+        # Why this guard is needed (data loss on support case 00481070):
+        # - per_email is a CHILD stream (fetched per-parent via
+        #   `personIdExternal eq '<id>'`) AND INCREMENTAL (own
+        #   lastModifiedDateTime replication key).
+        # - Child records (e.g. an email address) are rarely modified again
+        #   after creation, so their lastModifiedDateTime is often OLDER than
+        #   start_date/bookmark even though the record is still valid.
+        # - Example: person "123" was created in 2015 and never touched since.
+        #   Combining both filters produces:
+        #     $filter=lastModifiedDateTime ge datetime'2024-01-01...'
+        #             and personIdExternal eq '123'
+        #   SAP returns 0 rows for that person — multiply by ~2,183 people
+        #   and only ~6 ever had a recent-enough timestamp to pass.
+        # - Fix: skip the date filter entirely for parent-scoped fetches;
+        #   completeness is governed by the PARENT's bookmark instead (it
+        #   decides whether to resync this parent, and therefore its
+        #   children, at all).
         is_parent_scoped_fetch = bool(parent_obj and self.parent_filter_field)
 
         if (
@@ -333,41 +341,61 @@ class BaseStream(ABC):
 
     def sync(self, state: Dict, transformer: Transformer, parent_obj: Dict = None) -> int:
         """Sync stream records and children streams."""
-        # A parent-scoped fetch (non-expand) already fully fetches every
-        # record for the given parent key, so client-side filtering by this
-        # stream's own replication key must be skipped — see build_params()
-        # for why combining both filters silently drops historical children.
+        # Why this guard is ALSO needed here (mirrors build_params() above):
+        # - build_params() stops the SERVER from filtering by date, but this
+        #   method has its OWN client-side bookmark comparison further down
+        #   (`if bookmark_key and bookmark: record_passes_bookmark = ...`).
+        # - Example: without this, the 2015 per_email record from the
+        #   build_params() example would come back from SAP (now unfiltered)
+        #   but still get silently dropped right here, before write_record()
+        #   runs — same data loss, just moved one layer down the call stack.
+        # - Fix: `is_parent_scoped_fetch` also forces `bookmark = None` below,
+        #   so every record returned by a parent-scoped fetch gets written.
         is_parent_scoped_fetch = bool(parent_obj and self.parent_filter_field)
 
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
-        # This stream instance is reused across every parent record (e.g.
-        # per_email.sync() runs once per per_person record — ~2,183 times for
-        # a typical tenant), so caching `bookmark` across calls may look like
-        # a worthwhile optimization. It isn't needed: when is_parent_scoped_fetch
-        # is True this ternary already short-circuits to None WITHOUT calling
-        # get_bookmark()/touching `state`, so there is nothing expensive here
-        # to cache on the hot path. A naive `if self.effective_bookmark: reuse
-        # else: compute` cache would also be fragile long-term — None is both
-        # the valid "no filter applies" result AND the "not computed yet"
-        # sentinel, so it would silently recompute every call anyway today,
-        # but could serve a stale value if this method's invariants ever
-        # change (see test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call).
+        # Why NOT cache `bookmark` across calls (reviewer question):
+        # - This instance is reused per parent record (e.g. per_email.sync()
+        #   runs once per per_person record — ~2,183 times/tenant), so
+        #   caching looks tempting here.
+        # - Not needed: when is_parent_scoped_fetch is True this ternary
+        #   already short-circuits to None WITHOUT calling get_bookmark() or
+        #   touching `state` — there is nothing expensive to cache.
+        # - A naive `if self.effective_bookmark: reuse else: compute` cache
+        #   would also be fragile: None is both the valid "no filter applies"
+        #   result AND the "not computed yet" sentinel, so it would silently
+        #   recompute every call anyway today, but could serve a stale value
+        #   if this method's invariants ever change.
+        # - See test_parent_scoped_fetch_bookmark_recomputed_fresh_each_call.
+        #
+        # Why `and self.is_selected()` was added (see min() comment below for
+        # the regression this prevents):
+        # - An unselected pass-through parent (e.g. per_person, added to
+        #   streams_to_sync only to reach a selected per_email) never writes
+        #   its own bookmark, so get_bookmark() for it would always default
+        #   to start_date — a misleadingly "fresh" value that must not be
+        #   treated as real progress.
         bookmark = (
             self.get_bookmark(state, self.tap_stream_id)
             if bookmark_key and not is_parent_scoped_fetch and self.is_selected()
             else None
         )
 
-        # When this stream is unselected and only running to reach a selected
-        # child (see is_selected() guard on the bookmark write below), its own
-        # bookmark is deliberately never persisted — it would otherwise always
-        # read back as start_date. Including that frozen start_date in the
-        # min() below would permanently win over the child's real, advancing
-        # checkpoint (e.g. per_person forever re-querying from start_date even
-        # though per_email's saved checkpoint moved to 2026-06-01), forcing a
-        # full historical re-fetch — and re-emission of its children — on
-        # every run. Leaving `bookmark` as None here lets the child's
-        # checkpoint alone seed it in the loop below instead.
+        # Why `bookmark` must stay None here when unselected (PR review fix):
+        # - When this stream is unselected and only running to reach a
+        #   selected child (see is_selected() guard on the bookmark write
+        #   further below), its own bookmark is deliberately never
+        #   persisted — so get_bookmark() for it always reads back as
+        #   start_date, never the stream's real progress.
+        # - Example: per_person is unselected, per_email is selected.
+        #   per_email's saved checkpoint correctly advances each run (e.g. to
+        #   2026-06-01). If per_person's frozen start_date (2024-01-01) were
+        #   fed into `min(own_bookmark, child_bookmark)` below, the OLDER
+        #   value always wins: min(2024-01-01, 2026-06-01) = 2024-01-01 —
+        #   forever. per_person would then re-query EVERY historical record,
+        #   and re-emit EVERY child, on every single run.
+        # - Fix: leave `bookmark` as None here when unselected, so the loop
+        #   below seeds it from the child's real, advancing checkpoint alone.
         if bookmark_key and self.child_to_sync and not is_parent_scoped_fetch:
             parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
             for child in self.child_to_sync:
@@ -424,10 +452,18 @@ class BaseStream(ABC):
                         )
 
             if bookmark_key and current_max_bookmark:
-                # sync.py adds unselected parents to streams_to_sync purely so a
-                # selected child can be reached — only advance the parent's OWN
-                # bookmark when it is actually selected, otherwise a later run
-                # that *does* select it would skip records never really synced.
+                # Why this write is gated on is_selected():
+                # - sync.py adds an unselected parent to streams_to_sync purely
+                #   so a selected child can be reached (e.g. only per_email is
+                #   selected; per_person is synced solely as a pass-through).
+                # - Example: without this guard, per_person would still
+                #   advance its own bookmark to "now" despite never writing a
+                #   single record. If the user later selects per_person
+                #   directly, the tap would think it's already caught up and
+                #   skip every historical record — even though none were ever
+                #   actually extracted.
+                # - Fix: only persist a stream's own bookmark when it is
+                #   actually selected.
                 if self.is_selected():
                     self.write_bookmark(
                         state, self.tap_stream_id, value=current_max_bookmark
