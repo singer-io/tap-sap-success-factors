@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import re
 from abc import ABC
 from datetime import datetime, timedelta, timezone
@@ -319,7 +319,15 @@ class BaseStream(ABC):
     def sync(self, state: Dict, transformer: Transformer, parent_obj: Dict = None) -> int:
         """Sync stream records and children streams."""
         bookmark_key = self.replication_keys[0] if self.replication_keys else None
-        bookmark = self.get_bookmark(state, self.tap_stream_id) if bookmark_key else None
+
+        if self.effective_bookmark is not None:
+            bookmark = self.effective_bookmark
+        else:
+            bookmark = (
+                self.get_bookmark(state, self.tap_stream_id)
+                if bookmark_key and self.is_selected()
+                else None
+            )
 
         if bookmark_key and self.child_to_sync:
             parent_bookmark_key = f"{self.tap_stream_id}_{bookmark_key}"
@@ -332,6 +340,7 @@ class BaseStream(ABC):
                 bookmark = min(bookmark, child_bookmark) if bookmark else child_bookmark
 
         self.effective_bookmark = bookmark
+
         # Only advance from real records — do NOT pre-seed with start_date so
         # that 0-record syncs never write a spurious bookmark.
         current_max_bookmark = None
@@ -377,9 +386,14 @@ class BaseStream(ABC):
                         )
 
             if bookmark_key and current_max_bookmark:
-                self.write_bookmark(
-                    state, self.tap_stream_id, value=current_max_bookmark
-                )
+                # An unselected stream can still be synced here purely to reach a
+                # selected child (sync.py force-adds it) — it must not advance its
+                # own bookmark, or records never actually emitted get skipped if
+                # this stream is selected in a later run.
+                if self.is_selected():
+                    self.write_bookmark(
+                        state, self.tap_stream_id, value=current_max_bookmark
+                    )
 
                 if self.child_to_sync:
                     parent_bookmark_key = (
@@ -392,7 +406,5 @@ class BaseStream(ABC):
                             key=parent_bookmark_key,
                             value=current_max_bookmark,
                         )
-
-            self.effective_bookmark = None
 
             return counter.value

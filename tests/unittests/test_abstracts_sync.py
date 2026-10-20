@@ -1,3 +1,4 @@
+import copy
 import unittest
 from unittest.mock import Mock, patch
 
@@ -244,6 +245,302 @@ class TestSync(unittest.TestCase):
                 stream.sync(state={}, transformer=transformer)
 
         self.assertEqual(observed["last_modified"], "2024-01-02T00:00:00.000000Z")
+
+    def test_unselected_pass_through_parent_does_not_write_own_bookmark(self):
+        """sync.py force-adds an unselected parent purely to reach a selected
+        child; that parent must not advance its own bookmark, or records it
+        never emitted get skipped if the parent is selected in a later run."""
+        client = _client()
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-01-02T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        catalog = type(
+            "FakeUnselectedCatalog",
+            (),
+            {
+                "schema": FakeCatalog.schema,
+                "stream": FakeCatalog.stream,
+                "tap_stream_id": FakeCatalog.tap_stream_id,
+                "key_properties": FakeCatalog.key_properties,
+                # Deep-copied so mutating "selected" below doesn't corrupt
+                # FakeCatalog.metadata, which is shared class-level state.
+                "metadata": copy.deepcopy(FakeCatalog.metadata),
+            },
+        )
+        catalog.metadata[0]["metadata"]["selected"] = False
+        stream = DynamicStream(client=client, catalog=catalog())
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        state = {}
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record") as write_record_patch:
+            stream.sync(state=state, transformer=transformer)
+
+        write_record_patch.assert_not_called()
+        self.assertNotIn(
+            "per_person",
+            state.get("bookmarks", {}),
+            "Unselected pass-through parent must not write its own bookmark",
+        )
+
+
+# ---------------------------------------------------------------------------
+# effective_bookmark caching across repeated sync() invocations (regression:
+# a child stream is re-synced once per parent record within a single run —
+# the bookmark captured at the start of that run must stay frozen across all
+# of those calls, not drift as each call's own write_bookmark advances state)
+# ---------------------------------------------------------------------------
+
+class TestEffectiveBookmarkCaching(unittest.TestCase):
+
+    def test_effective_bookmark_reused_across_repeated_sync_calls(self):
+        """A later sync() call on the same instance must reuse the bookmark
+        captured by the first call, not a value state was advanced to meanwhile."""
+        client = _client()
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        state = {}
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        written = []
+
+        # First call advances the bookmark far ahead of start_date.
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-06-01T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=lambda sid, rec, **_: written.append(rec),
+        ):
+            stream.sync(state=state, transformer=transformer)
+
+        self.assertEqual(
+            state["bookmarks"]["per_person"]["lastModifiedDateTime"],
+            "2024-06-01T00:00:00.000000Z",
+        )
+
+        # Second call (e.g. the same child instance re-synced for the next
+        # parent record) sees a record dated BEFORE the now-advanced state
+        # bookmark but AFTER the original start_date. It must still pass,
+        # because the comparison bookmark has to stay pinned to the value
+        # captured before the first call wrote — not state's current value.
+        client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "2",
+                        "lastModifiedDateTime": "2024-03-01T00:00:00.000000Z",
+                    }
+                ],
+                "__next": None,
+            }
+        }
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=lambda sid, rec, **_: written.append(rec),
+        ):
+            stream.sync(state=state, transformer=transformer)
+
+        self.assertEqual(
+            len(written),
+            2,
+            "Second record must still be written — effective_bookmark must "
+            "not silently re-derive from the already-advanced state bookmark",
+        )
+
+    def test_effective_bookmark_not_reset_after_sync_returns(self):
+        """effective_bookmark must remain cached after sync() completes so
+        subsequent calls (e.g. repeated child syncs within one parent loop)
+        reuse it instead of recomputing from state."""
+        client = _client()
+        client.get.return_value = {"d": {"results": [], "__next": None}}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        transformer = Mock()
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                stream.sync(state={}, transformer=transformer)
+
+        self.assertIsNotNone(
+            stream.effective_bookmark,
+            "effective_bookmark must stay cached after sync() returns",
+        )
+
+    def test_effective_bookmark_reflects_child_alignment_not_raw_own_bookmark(self):
+        """effective_bookmark must be the child-aligned (minimum) value, not
+        the parent's raw own bookmark. build_params() reads effective_bookmark
+        to build the SAP $filter query, so an un-aligned value would stop the
+        API call itself from ever fetching records needed to backfill a
+        lagging/newly-selected child."""
+        client = _client()
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.child_to_sync = [Mock(tap_stream_id="per_email")]
+        stream.get_records = Mock(return_value=iter([]))
+
+        state = {
+            "bookmarks": {
+                # Parent has advanced well past start_date...
+                "per_person": {"lastModifiedDateTime": "2024-06-01T00:00:00.000000Z"},
+                # ...but per_email has no composite entry yet (never caught up),
+                # so it falls back to the configured start_date.
+            }
+        }
+        transformer = Mock()
+
+        with patch("tap_sap_success_factors.streams.abstracts.write_record"):
+            with patch("tap_sap_success_factors.streams.abstracts.write_bookmark"):
+                stream.sync(state=state, transformer=transformer)
+
+        self.assertEqual(
+            stream.effective_bookmark,
+            client.config["start_date"],
+            "effective_bookmark must reflect the child-aligned (older) "
+            "bookmark, not the parent's own already-advanced bookmark",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sample-data fixture for the real per_person -> per_email relationship.
+#
+# There is no SAP SuccessFactors test account available to exercise this
+# against a live connection, so this models the production entities/metadata
+# directly (entity-set PerEmail, parent-filter-field/parent-key-field
+# personIdExternal, own INCREMENTAL replication key lastModifiedDateTime)
+# with representative OData-shaped sample payloads.
+# ---------------------------------------------------------------------------
+
+class FakePerEmailCatalog:
+    """Catalog entry for 'per_email', an INCREMENTAL child of 'per_person'."""
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "emailAddress": {"type": ["null", "string"]},
+                    "personIdExternal": {"type": ["null", "string"]},
+                    "lastModifiedDateTime": {
+                        "type": ["null", "string"],
+                        "format": "date-time",
+                    },
+                },
+            }
+
+    schema = _Schema()
+    stream = "per_email"
+    tap_stream_id = "per_email"
+    key_properties = ["personIdExternal", "emailAddress"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": True,
+                "valid-replication-keys": ["lastModifiedDateTime"],
+                "forced-replication-method": "INCREMENTAL",
+                "tap-sap-success-factors.entity-set": "PerEmail",
+                "api-path": "/odata/v2/PerEmail",
+                "parent-tap-stream-id": "per_person",
+                "tap-sap-success-factors.parent-filter-field": "personIdExternal",
+                "tap-sap-success-factors.parent-key-field": "personIdExternal",
+            },
+        }
+    ]
+
+
+class TestEffectiveBookmarkCachingRealWorldScenario(unittest.TestCase):
+    """Reproduces the production per_person -> per_email data-loss scenario
+    end-to-end, through the real parent.sync() -> child.sync() recursion
+    (not a manual repeated call), using sample data shaped like real
+    SAP SuccessFactors records."""
+
+    def test_second_persons_email_is_not_dropped_by_first_persons_bookmark_write(self):
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "100",
+                        "lastModifiedDateTime": "2024-01-05T00:00:00.000000Z",
+                    },
+                    {
+                        "personIdExternal": "101",
+                        "lastModifiedDateTime": "2024-01-06T00:00:00.000000Z",
+                    },
+                ],
+                "__next": None,
+            }
+        }
+        parent_stream = DynamicStream(client=parent_client, catalog=FakeCatalog())
+
+        child_client = _client()
+        # Person 100's email was recently touched; person 101's email predates
+        # it but is still a legitimate record that has never been synced before.
+        child_client.get.side_effect = [
+            {
+                "d": {
+                    "results": [
+                        {
+                            "personIdExternal": "100",
+                            "emailAddress": "p100@example.com",
+                            "lastModifiedDateTime": "2024-06-01T00:00:00.000000Z",
+                        }
+                    ],
+                    "__next": None,
+                }
+            },
+            {
+                "d": {
+                    "results": [
+                        {
+                            "personIdExternal": "101",
+                            "emailAddress": "p101@example.com",
+                            "lastModifiedDateTime": "2024-03-01T00:00:00.000000Z",
+                        }
+                    ],
+                    "__next": None,
+                }
+            },
+        ]
+        child_stream = DynamicStream(client=child_client, catalog=FakePerEmailCatalog())
+        parent_stream.child_to_sync = [child_stream]
+
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        emitted_emails = []
+
+        def _capture(stream_id, record, **_):
+            if stream_id == "per_email":
+                emitted_emails.append(record["emailAddress"])
+
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=_capture,
+        ):
+            parent_stream.sync(state={}, transformer=transformer)
+
+        self.assertEqual(
+            emitted_emails,
+            ["p100@example.com", "p101@example.com"],
+            "Both per_email records must be emitted — person 101's email must "
+            "not be dropped just because person 100's email advanced the "
+            "per_email bookmark earlier in this same run",
+        )
 
 
 # ---------------------------------------------------------------------------
