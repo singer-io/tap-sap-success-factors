@@ -281,6 +281,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_KEYS: {"lastModifiedDate"},
                 cls.OBEYS_START_DATE: True,
             },
+            "ec_int_data_quality_check_tool_alert": {
+                cls.PRIMARY_KEYS: {"externalCode"},
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
+                cls.OBEYS_START_DATE: True,
+            },
             "employee_payroll_run_results": {
                 cls.PRIMARY_KEYS: {"externalCode", "mdfSystemEffectiveStartDate"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
@@ -3098,6 +3104,7 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             "custom_pay_type",
             "custom_pay_type_assignment",
             "data_replication_proxy",
+            "ec_int_data_quality_check_tool_alert",
             "electronic_sickness_certificate_exclusion_reason_deu",
             "emp_compensation",
             "emp_employment",
