@@ -3104,6 +3104,7 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             "custom_pay_type",
             "custom_pay_type_assignment",
             "data_replication_proxy",
+            "ec_int_data_quality_check_tool_alert",
             "electronic_sickness_certificate_exclusion_reason_deu",
             "emp_compensation",
             "emp_employment",
