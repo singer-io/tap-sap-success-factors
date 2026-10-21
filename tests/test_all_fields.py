@@ -697,6 +697,12 @@ class SAPSFAllFieldsTest(AllFieldsTest, SAPSuccessFactorsBaseTest):
             'hr_benchStrength',
             'reasonForLeavingNav_status',
             'secondManager_restartedByOfONB2ProcessTaskNav_deferred_uri',
+            'secondManager_assigneeUserIdOfECIntDataQualityCheckToolAlertNav_deferred_uri',
+            'secondManager_lastActionTriggeredByOfECIntDataQualityCheckToolAlertNav_deferred_uri',
+            'manager_lastActionTriggeredByOfECIntDataQualityCheckToolAlertNav_deferred_uri',
+            'manager_assigneeUserIdOfECIntDataQualityCheckToolAlertNav_deferred_uri',
+            'hr_assigneeUserIdOfECIntDataQualityCheckToolAlertNav_deferred_uri',
+            'hr_lastActionTriggeredByOfECIntDataQualityCheckToolAlertNav_deferred_uri',
         ]
     }
 
