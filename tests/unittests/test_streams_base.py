@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock
 
+from singer import metadata as singer_metadata
+
 from tap_sap_success_factors.streams.dynamic import DynamicStream
 
 
@@ -114,6 +116,150 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         params = stream.build_params(state={})
         self.assertIn("$filter", params)
         self.assertIn("lastModifiedDateTime", params["$filter"])
+
+    def test_expand_added_for_flatten_nav_properties(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$expand"], "emailTypeNav")
+
+    def test_expand_omitted_when_flattened_fields_are_deselected(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+        stream.metadata = singer_metadata.write(
+            stream.metadata,
+            ("properties", "emailTypeNav_externalCode"),
+            "selected",
+            False,
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+    def test_expand_kept_when_any_flattened_field_is_selected(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"].update({
+            "emailTypeNav_externalCode": {"type": ["null", "string"]},
+            "emailTypeNav_status": {"type": ["null", "string"]},
+        })
+        stream.metadata = singer_metadata.write(
+            stream.metadata,
+            ("properties", "emailTypeNav_externalCode"),
+            "selected",
+            False,
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$expand"], "emailTypeNav")
+
+    def test_expand_omitted_for_unselected_dependency_stream(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+        stream.metadata = singer_metadata.write(
+            stream.metadata, (), "selected", False
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+    def test_expand_not_added_when_already_expand_nav_stream(self):
+        """A stream fetched via the separate expand_nav_property path (Group
+        5) must not also get a flatten-$expand — it queries a different
+        parent entity set entirely."""
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.expand_nav_property = "permissionsNav"
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+
+class TestFlattenNavData(unittest.TestCase):
+
+    def test_flattens_expanded_nav_into_prefixed_fields(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+
+        record = {
+            "emailType": "home",
+            "emailTypeNav": {
+                "externalCode": "HOME",
+                "id": 7,
+                "childPicklistOptions": {
+                    "__deferred": {
+                        "uri": "https://sf/odata/v2/PicklistOption(7)/childPicklistOptions"
+                    }
+                },
+            },
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertNotIn("emailTypeNav", result)
+        self.assertEqual(result["emailTypeNav_externalCode"], "HOME")
+        self.assertEqual(result["emailTypeNav_id"], 7)
+        self.assertEqual(
+            result["emailTypeNav_childPicklistOptions_deferred_uri"],
+            "https://sf/odata/v2/PicklistOption(7)/childPicklistOptions",
+        )
+
+    def test_leaves_unexpanded_deferred_nav_untouched(self):
+        """If $expand silently fails to apply (e.g. SAP ignores an unknown
+        nav), the raw __deferred link must be left as-is rather than
+        crashing or emitting half-flattened fields."""
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+
+        record = {
+            "emailType": "home",
+            "emailTypeNav": {"__deferred": {"uri": "https://sf/.../emailTypeNav"}},
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertEqual(
+            result["emailTypeNav"], {"__deferred": {"uri": "https://sf/.../emailTypeNav"}}
+        )
+
+    def test_noop_when_no_flatten_nav_properties_configured(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        record = {"personIdExternal": "1"}
+        result = stream.flatten_nav_data(record)
+
+        self.assertEqual(result, {"personIdExternal": "1"})
 
 
 class TestParseOdataRecords(unittest.TestCase):

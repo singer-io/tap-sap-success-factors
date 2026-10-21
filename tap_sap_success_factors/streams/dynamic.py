@@ -59,6 +59,13 @@ class DynamicStream(BaseStream):
                 f"{MDATA_NS}.expand-parent-entity-set"
             ) or ""
         )
+        # Nav properties flattened inline into this stream's own schema
+        # (e.g. "emailTypeNav" -> "emailTypeNav_externalCode", ...).
+        # Fetched via $expand on this stream's own query, not a separate
+        # parent entity set.
+        self.flatten_nav_properties = (
+            root_metadata.get(f"{MDATA_NS}.flatten-nav-properties") or []
+        )
         if self.expand_nav_property and self.expand_parent_entity_set:
             # Override path to point at the parent entity set (not this stream's
             # own entity set) so that _get_records_via_expand queries correctly.
