@@ -260,7 +260,12 @@ class BaseStream(ABC):
         still-unexpanded navigation properties collapse to a single
         ``<nav>_<subNav>_deferred_uri`` placeholder (one level deep only,
         matching the discovery-time schema).
+
+        The ``__metadata`` envelope ({"uri", "type"}) is flattened to
+        ``metadata_uri``/``metadata_type`` (``<nav>_metadata_*`` for navs), and
+        every remaining unexpanded top-level nav becomes ``<nav>_deferred_uri``.
         """
+        self._flatten_metadata_envelope(record, "")
         for nav_name in self.flatten_nav_properties:
             if nav_name not in record:
                 continue
@@ -268,12 +273,31 @@ class BaseStream(ABC):
             if not isinstance(nav_data, dict) or "__deferred" in nav_data:
                 continue  # expand failed/absent — leave the raw value as-is
             del record[nav_name]
+            self._flatten_metadata_envelope(nav_data, f"{nav_name}_", record)
             for key, value in nav_data.items():
                 if isinstance(value, dict) and "__deferred" in value:
                     record[f"{nav_name}_{key}_deferred_uri"] = value["__deferred"].get("uri")
                 else:
                     record[f"{nav_name}_{key}"] = value
+
+        for key, value in list(record.items()):
+            if isinstance(value, dict) and "__deferred" in value:
+                record[f"{key}_deferred_uri"] = value["__deferred"].get("uri")
+                del record[key]
         return record
+
+    @staticmethod
+    def _flatten_metadata_envelope(source: Dict, prefix: str, target: Dict = None) -> None:
+        """Move ``source['__metadata']`` into ``<prefix>metadata_type/uri`` on *target*.
+
+        *target* defaults to *source*. The envelope is always removed from *source*.
+        """
+        envelope = source.pop("__metadata", None)
+        if not isinstance(envelope, dict):
+            return
+        target = source if target is None else target
+        target.setdefault(f"{prefix}metadata_type", envelope.get("type"))
+        target.setdefault(f"{prefix}metadata_uri", envelope.get("uri"))
 
     def modify_object(self, record: Dict, _parent_record: Dict = None) -> Dict:
         """Allow child streams to enrich records."""

@@ -61,6 +61,9 @@ BLOCKED_EXPAND_NAV_PROPERTIES = {
     "wfRequestNav",
 }
 
+# Suffixes of the fields flattened from the OData V2 "__metadata" envelope.
+METADATA_ENVELOPE_SUFFIXES = ("metadata_type", "metadata_uri")
+
 EDM_TO_JSON_TYPE = {
     "Edm.String": ["null", "string"],
     "Edm.Guid": ["null", "string"],
@@ -780,14 +783,14 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
 
         # ------------------------------------------------------------------
         # Group 6: Flatten to-one (single-valued) NavigationProperty lookups
-        # only after parent inference and compatibility validation. A nav
-        # initially considered a parent link is still a lookup if that
-        # relationship is later rejected.
+        # after parent inference and compatibility validation. The nav that
+        # provides the parent link is flattened too (e.g. PerEmail.personNav),
+        # so the parent's fields remain available on the child record.
         # ------------------------------------------------------------------
         flatten_navs: List[str] = []
         for nav in entity_navigations.get(entity_type, []):
             nav_name = nav.get("name")
-            if not nav_name or (nav_name == matched_nav_name and parent_stream):
+            if not nav_name:
                 continue
             if nav_name in BLOCKED_EXPAND_NAV_PROPERTIES:
                 continue
@@ -813,7 +816,22 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                     properties[f"{nav_name}_{sub_nav_name}_deferred_uri"] = {
                         "type": ["null", "string"]
                     }
+            for suffix in METADATA_ENVELOPE_SUFFIXES:
+                properties.setdefault(
+                    f"{nav_name}_{suffix}", {"type": ["null", "string"]}
+                )
             flatten_navs.append(nav_name)
+
+        # Unexpanded navs come back as {"__deferred": {"uri": ...}}.
+        for nav in entity_navigations.get(entity_type, []):
+            nav_name = nav.get("name")
+            if nav_name and nav_name not in flatten_navs:
+                properties.setdefault(
+                    f"{nav_name}_deferred_uri", {"type": ["null", "string"]}
+                )
+
+        for suffix in METADATA_ENVELOPE_SUFFIXES:
+            properties.setdefault(suffix, {"type": ["null", "string"]})
 
         if parent_stream and parent_key_field:
             parent_entity_type = stream_to_entity_type.get(parent_stream)

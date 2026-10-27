@@ -782,7 +782,7 @@ class TestFlattenNavProperties(unittest.TestCase):
         )
         self.assertEqual(
             stream_defs["per_email"]["flatten_nav_properties"],
-            ["emailTypeNav"],
+            ["emailTypeNav", "personNav"],
         )
 
     def test_lookup_target_does_not_need_a_standalone_entity_set(self):
@@ -800,7 +800,7 @@ class TestFlattenNavProperties(unittest.TestCase):
         )
         self.assertEqual(
             stream_defs["per_email"]["flatten_nav_properties"],
-            ["emailTypeNav"],
+            ["emailTypeNav", "personNav"],
         )
 
     def test_discovery_retains_stream_and_marks_rejected_lookup_unsupported(self):
@@ -834,17 +834,61 @@ class TestFlattenNavProperties(unittest.TestCase):
             [],
         )
 
-    def test_parent_link_nav_is_not_flattened(self):
-        """personNav resolves this stream's parent relationship, so it must
-        be excluded from flattening (would duplicate the parent record)."""
+    def test_parent_link_nav_is_also_flattened(self):
+        """personNav provides the parent link but is still flattened so the
+        parent's fields are available on the child record."""
         schemas, _, stream_defs = discover_dynamic_streams(_client(self.EDMX))
         props = schemas["per_email"]["properties"]
 
-        self.assertNotIn("personNav_personIdExternal", props)
+        self.assertIn("personNav_personIdExternal", props)
+        self.assertNotIn("personNav", props)
         self.assertEqual(stream_defs["per_email"]["parent_stream"], "person")
-        self.assertNotIn(
+        self.assertIn(
             "personNav", stream_defs["per_email"]["flatten_nav_properties"]
         )
+
+    def test_root_and_flattened_nav_metadata_fields_are_added(self):
+        schemas, _, _ = discover_dynamic_streams(_client(self.EDMX))
+        props = schemas["per_email"]["properties"]
+
+        for name in (
+            "metadata_type",
+            "metadata_uri",
+            "emailTypeNav_metadata_type",
+            "emailTypeNav_metadata_uri",
+            "personNav_metadata_type",
+            "personNav_metadata_uri",
+        ):
+            self.assertEqual(props[name], {"type": ["null", "string"]}, name)
+
+    def test_metadata_fields_do_not_override_real_properties(self):
+        xml = self.EDMX.replace(
+            '<Property Name="emailAddress" Type="Edm.String"/>',
+            '<Property Name="emailAddress" Type="Edm.String"/>\n'
+            '        <Property Name="metadata_type" Type="Edm.Int32"/>',
+        )
+
+        schemas, _, _ = discover_dynamic_streams(_client(xml))
+
+        self.assertEqual(
+            schemas["per_email"]["properties"]["metadata_type"]["type"],
+            ["null", "integer"],
+        )
+
+    def test_non_flattened_navs_get_deferred_uri_field(self):
+        """To-many navs have no flattened fields, so each one is exposed as a
+        <nav>_deferred_uri; flattened navs must not get one."""
+        schemas, _, _ = discover_dynamic_streams(_client(self.EDMX))
+
+        picklist_props = schemas["picklist_option"]["properties"]
+        self.assertEqual(
+            picklist_props["childPicklistOptions_deferred_uri"]["type"],
+            ["null", "string"],
+        )
+
+        per_email_props = schemas["per_email"]["properties"]
+        self.assertNotIn("emailTypeNav_deferred_uri", per_email_props)
+        self.assertNotIn("personNav_deferred_uri", per_email_props)
 
     def test_to_many_nav_is_not_flattened(self):
         """childPicklistOptions on PicklistOption is to-many and must never
@@ -887,7 +931,10 @@ class TestFlattenNavProperties(unittest.TestCase):
             '      <EntityType Name="PerEmail">',
         )
 
-        _, _, stream_defs = discover_dynamic_streams(_client(xml))
+        schemas, _, stream_defs = discover_dynamic_streams(_client(xml))
         self.assertNotIn(
             "wfRequestNav", stream_defs["per_email"]["flatten_nav_properties"]
+        )
+        self.assertIn(
+            "wfRequestNav_deferred_uri", schemas["per_email"]["properties"]
         )
