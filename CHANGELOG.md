@@ -1,7 +1,7 @@
 # Changelog
 
 ## 0.2.0
-- Update parent-child relationship with key-composition based workflow.[#10](https://github.com/singer-io/tap-sap-success-factors/pull/10)
+- Update parent-child relationship with key-composition based workflow.[#12](https://github.com/singer-io/tap-sap-success-factors/pull/12)
 
 ## 0.1.1
 - Fix stale `effective_bookmark` cache in `BaseStream.sync()` that let a stream re-synced multiple times in one run (e.g. a child stream synced once per parent record) silently drop valid records as the bookmark kept advancing mid-run.[#9](https://github.com/singer-io/tap-sap-success-factors/pull/9)
