@@ -197,7 +197,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "currency",
             },
             "currency": {
                 cls.PRIMARY_KEYS: {"code", "effectiveStartDate"},
@@ -210,7 +209,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "currency",
             },
             "digital_support_incident": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -241,7 +239,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "position",
             },
             "dummy_position_matrix_relationship": {
                 cls.PRIMARY_KEYS: {
@@ -292,7 +289,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "fo_company",
             },
             "employee_payroll_run_results_items": {
                 cls.PRIMARY_KEYS: {
@@ -314,7 +310,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "mdf_block_config",
             },
             "employee_profile_block_link": {
                 cls.PRIMARY_KEYS: {
@@ -431,7 +426,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "company_contact_details",
             },
             "person_type": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -444,7 +438,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "person_type",
             },
             "photo": {
                 cls.PRIMARY_KEYS: {"photoType", "userId"},
@@ -492,14 +485,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "country",
             },
             "todo_entry_v2": {
                 cls.PRIMARY_KEYS: {"todoEntryId"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "user": {
                 cls.PRIMARY_KEYS: {"userId"},
@@ -524,7 +515,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "wf_request_participator": {
                 cls.PRIMARY_KEYS: {"wfRequestParticipatorId"},
@@ -537,7 +527,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "wf_request",
             },
             # ------------------------------------------------------------------ #
             # FULL_TABLE streams — no filterable lastModified* field discovered   #
@@ -676,6 +665,11 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
                 cls.OBEYS_START_DATE: False,
             },
+            "form_audit_trail": {
+                cls.PRIMARY_KEYS: {"auditTrailId"},
+                cls.REPLICATION_METHOD: cls.FULL_TABLE,
+                cls.OBEYS_START_DATE: False,
+            },
             "goal_achievements": {
                 cls.PRIMARY_KEYS: {"goalId", "subjectUserId"},
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
@@ -716,7 +710,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.PRIMARY_KEYS: {"id"},
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
                 cls.OBEYS_START_DATE: False,
-                cls.PARENT_TAP_STREAM_ID: "job_application_assessment_order",
             },
             "job_application_background_check_result": {
                 cls.PRIMARY_KEYS: {"statusId"},
@@ -732,7 +725,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.PRIMARY_KEYS: {"appStatusId"},
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
                 cls.OBEYS_START_DATE: False,
-                cls.PARENT_TAP_STREAM_ID: "job_application_status",
             },
             "job_req_question": {
                 cls.PRIMARY_KEYS: {"questionId"},
@@ -803,7 +795,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.PRIMARY_KEYS: {"locale", "optionId"},
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
                 cls.OBEYS_START_DATE: False,
-                cls.PARENT_TAP_STREAM_ID: "picklist_option",
             },
             "picklist_option": {
                 cls.PRIMARY_KEYS: {"id"},
@@ -915,21 +906,18 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "allowance": {
                 cls.PRIMARY_KEYS: {"EmployeeTimeSheet_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "allowance_type",
             },
             "allowance_recording": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "allowance_type",
             },
             "allowance_type": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -948,14 +936,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "allowance_type",
             },
             "available_time_type": {
                 cls.PRIMARY_KEYS: {"TimeTypeProfile_externalCode", "TimeTypeProfile_mdfSystemEffectiveStartDate", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_type",
             },
             "bank": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -968,7 +954,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "candidate": {
                 cls.PRIMARY_KEYS: {"candidateId"},
@@ -1021,7 +1006,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "onb2_process",
             },
             "compliance_process_task": {
                 cls.PRIMARY_KEYS: {"taskId"},
@@ -1039,7 +1023,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "pick_list_value_v2",
             },
             "custom_pay_type": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -1058,7 +1041,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "electronic_sickness_certificate_exclusion_reason_deu": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -1085,14 +1067,13 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "emp_employment_termination": {
                 cls.PRIMARY_KEYS: {"endDate", "personIdExternal", "userId"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "emp_employment",
+                cls.PARENT_TAP_STREAM_ID: "per_person",
             },
             "emp_job": {
                 cls.PRIMARY_KEYS: {"seqNumber", "startDate", "userId"},
@@ -1132,7 +1113,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "replication_target_system",
             },
             "employee_data_replication_confirmation_error_message": {
                 cls.PRIMARY_KEYS: {"EmployeeDataReplicationConfirmation_externalCode", "externalCode"},
@@ -1145,21 +1125,18 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_data_replication_confirmation",
             },
             "employee_data_replication_notification": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "replication_target_system",
             },
             "employee_time": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "employee_time_aus": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
@@ -1184,49 +1161,42 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time_group",
             },
             "employee_time_deu": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "electronic_sickness_certificate_exclusion_reason_deu",
             },
             "employee_time_esp": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time_group",
             },
             "employee_time_group": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "employee_time_group_item": {
                 cls.PRIMARY_KEYS: {"EmployeeTimeGroup_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time",
             },
             "employee_time_ita": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time_group",
             },
             "employee_time_mex": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time_group",
             },
             "employee_time_nld": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
@@ -1251,14 +1221,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "employee_time_sheet_entry": {
                 cls.PRIMARY_KEYS: {"EmployeeTimeSheet_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time",
             },
             "employee_time_swe": {
                 cls.PRIMARY_KEYS: {"EmployeeTime_externalCode", "externalCode"},
@@ -1271,14 +1239,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time_group",
             },
             "employee_time_valuation_result": {
                 cls.PRIMARY_KEYS: {"EmployeeTimeSheet_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "allowance_type",
             },
             "ext_email_info": {
                 cls.PRIMARY_KEYS: {"emailInfoId"},
@@ -1303,21 +1269,18 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "mdf_enum_value",
             },
             "external_time_data": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "external_time_record": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "external_time_segment": {
                 cls.PRIMARY_KEYS: {"ExternalTimeRecord_externalCode", "externalCode"},
@@ -1342,7 +1305,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "fo_pay_group",
             },
             "fo_cost_center": {
                 cls.PRIMARY_KEYS: {"externalCode", "startDate"},
@@ -1355,7 +1317,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "fo_cost_center",
             },
             "fo_division": {
                 cls.PRIMARY_KEYS: {"externalCode", "startDate"},
@@ -1410,14 +1371,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "pick_list_value_v2",
             },
             "fo_job_function": {
                 cls.PRIMARY_KEYS: {"externalCode", "startDate"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "pick_list_value_v2",
             },
             "fo_legal_entity_local_arg": {
                 cls.PRIMARY_KEYS: {"country", "externalCode", "startDate"},
@@ -1492,7 +1451,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.PRIMARY_KEYS: {"formDataId"},
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
                 cls.OBEYS_START_DATE: False,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "form_introduction_section": {
                 cls.PRIMARY_KEYS: {"formContentId", "formDataId"},
@@ -1644,7 +1602,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "interview_individual_assessment": {
                 cls.PRIMARY_KEYS: {"interviewIndividualAssessmentId"},
@@ -1666,7 +1623,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.PRIMARY_KEYS: {"id"},
                 cls.REPLICATION_METHOD: cls.FULL_TABLE,
                 cls.OBEYS_START_DATE: False,
-                cls.PARENT_TAP_STREAM_ID: "job_application_assessment_report",
             },
             "job_application_audit": {
                 cls.PRIMARY_KEYS: {"fieldOrderPos", "revNumber"},
@@ -1788,7 +1744,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "job_location_long_format",
             },
             "job_location_long_format": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2032,7 +1987,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "onb2_equipment_type",
             },
             "onb2_process": {
                 cls.PRIMARY_KEYS: {"processId"},
@@ -2051,7 +2005,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "onb2_process",
             },
             "onb2_process_trigger": {
                 cls.PRIMARY_KEYS: {"triggerId"},
@@ -2100,14 +2053,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "pay_scale_area",
             },
             "pay_scale_level": {
                 cls.PRIMARY_KEYS: {"code", "effectiveStartDate"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "pay_scale_group",
             },
             "pay_scale_type": {
                 cls.PRIMARY_KEYS: {"code"},
@@ -2120,7 +2071,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "bank",
             },
             "payment_information_detail_v3_arg": {
                 cls.PRIMARY_KEYS: {"PaymentInformationDetailV3_externalCode", "PaymentInformationV3_effectiveStartDate", "PaymentInformationV3_worker", "externalCode"},
@@ -2337,7 +2287,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "country",
             },
             "payment_method_assignment_v3": {
                 cls.PRIMARY_KEYS: {"PaymentMethodV3_externalCode", "externalCode"},
@@ -2368,7 +2317,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "payroll_data_maintenance_task_configuration": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2429,21 +2377,18 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "payroll_mnt_time_type_filter": {
                 cls.PRIMARY_KEYS: {"PayrollMntTasksFilter_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_type",
             },
             "payroll_system_configuration": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "sap_system_configuration",
             },
             "per_email": {
                 cls.PRIMARY_KEYS: {"emailType", "personIdExternal"},
@@ -2519,7 +2464,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "sap_system_configuration",
             },
             "shift_classification": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2538,28 +2482,24 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "time_account": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_account_type",
             },
             "time_account_detail": {
                 cls.PRIMARY_KEYS: {"TimeAccount_externalCode", "externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time_calendar",
             },
             "time_account_payout": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_account_type",
             },
             "time_account_payout_profile": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2572,7 +2512,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_account_type",
             },
             "time_account_purchase_profile": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2585,7 +2524,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_account_type",
             },
             "time_account_summary": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2598,7 +2536,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "periodic_time_account_update_profile",
             },
             "time_account_type_aus": {
                 cls.PRIMARY_KEYS: {"TimeAccountType_externalCode", "externalCode"},
@@ -2611,14 +2548,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "time_container": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "time_management_alert": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2631,14 +2566,12 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "employee_time",
             },
             "time_management_termination_end_handling_configuration": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_management_termination_end_handling_exclusion",
             },
             "time_management_termination_end_handling_excluded_event_reason": {
                 cls.PRIMARY_KEYS: {"TimeManagementTerminationEndHandlingExclusion_externalCode", "externalCode"},
@@ -2651,7 +2584,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_account_type",
             },
             "time_management_termination_end_handling_exclusion": {
                 cls.PRIMARY_KEYS: {"externalCode"},
@@ -2664,21 +2596,18 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_management_termination_end_handling_exclusion",
             },
             "time_recording": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "time_type": {
                 cls.PRIMARY_KEYS: {"externalCode"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "absence_counting_method",
             },
             "time_type_aus": {
                 cls.PRIMARY_KEYS: {"TimeType_externalCode", "externalCode"},
@@ -2721,7 +2650,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "time_type",
             },
             "time_type_swe": {
                 cls.PRIMARY_KEYS: {"TimeType_externalCode", "externalCode"},
@@ -2740,7 +2668,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "work_schedule_day": {
                 cls.PRIMARY_KEYS: {"WorkSchedule_externalCode", "day"},
@@ -2753,7 +2680,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "shift_classification",
             },
             "work_schedule_day_model_assignment": {
                 cls.PRIMARY_KEYS: {"WorkSchedule_externalCode", "day"},
