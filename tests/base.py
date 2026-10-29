@@ -3315,6 +3315,7 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             "work_schedule_day_model_segment",
             "work_schedule_day_model_variant_assignment",
             "work_schedule_day_model_variant_identifier",
-            "job_classification_usa_state_detail"
+            "job_classification_usa_state_detail",
+            "form_audit_trail"
 
         }
