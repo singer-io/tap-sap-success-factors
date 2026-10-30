@@ -887,7 +887,8 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             },
             "workflow_allowed_action_list": {
                 cls.PRIMARY_KEYS: {"wfRequestId"},
-                cls.REPLICATION_METHOD: cls.FULL_TABLE,
+                cls.REPLICATION_METHOD: cls.INCREMENTAL,
+                cls.REPLICATION_KEYS: {"__parent_wf_request_lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: False,
                 cls.PARENT_TAP_STREAM_ID: "wf_request",
             },
@@ -1053,7 +1054,7 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "emp_employment",
+                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "emp_employment": {
                 cls.PRIMARY_KEYS: {"personIdExternal", "userId"},
@@ -1080,21 +1081,21 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "emp_employment",
+                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "emp_pay_comp_non_recurring": {
                 cls.PRIMARY_KEYS: {"payComponentCode", "payDate", "userId"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "emp_employment",
+                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "emp_pay_comp_recurring": {
                 cls.PRIMARY_KEYS: {"payComponent", "seqNumber", "startDate", "userId"},
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "emp_compensation",
+                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "emp_time_account_balance": {
                 cls.PRIMARY_KEYS: {"timeAccount"},
@@ -1106,7 +1107,7 @@ class SAPSuccessFactorsBaseTest(BaseCase):
                 cls.REPLICATION_METHOD: cls.INCREMENTAL,
                 cls.REPLICATION_KEYS: {"lastModifiedDateTime"},
                 cls.OBEYS_START_DATE: True,
-                cls.PARENT_TAP_STREAM_ID: "emp_employment",
+                cls.PARENT_TAP_STREAM_ID: "user",
             },
             "employee_data_replication_confirmation": {
                 cls.PRIMARY_KEYS: {"externalCode"},

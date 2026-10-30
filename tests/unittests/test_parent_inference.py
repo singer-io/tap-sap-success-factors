@@ -6,6 +6,13 @@ from tap_sap_success_factors.metadata_discovery import discover_dynamic_streams
 
 STR = "Edm.String"
 DT = "Edm.DateTime"
+STR_NOT_FILTERABLE = "Edm.String;nofilter"
+
+
+def _property_xml(name, edm_type):
+    edm_type, _, flag = edm_type.partition(";")
+    sap = ' sap:filterable="false"' if flag == "nofilter" else ""
+    return f'<Property Name="{name}" Type="{edm_type}"{sap}/>'
 
 
 def _client(metadata_xml):
@@ -28,9 +35,7 @@ def _edmx(entities, associations=""):
     sets = []
     for name, keys, props, navs in entities:
         key_xml = "".join(f'<PropertyRef Name="{k}"/>' for k in keys)
-        prop_xml = "".join(
-            f'<Property Name="{p}" Type="{t}"/>' for p, t in props.items()
-        )
+        prop_xml = "".join(_property_xml(p, t) for p, t in props.items())
         nav_xml = "".join(
             f'<NavigationProperty Name="{n}" Relationship="SFOData.{a}" '
             f'FromRole="{name}" ToRole="{r}"/>'
@@ -46,7 +51,7 @@ def _edmx(entities, associations=""):
         '<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">'
         "<edmx:DataServices>"
         '<Schema xmlns="http://schemas.microsoft.com/ado/2008/09/edm" '
-        'Namespace="SFOData">'
+        'Namespace="SFOData" xmlns:sap="http://www.successfactors.com/edm/sap">'
         + "".join(parts)
         + associations
         + '<EntityContainer Name="C" m:IsDefaultEntityContainer="true" '
@@ -162,7 +167,22 @@ class TestCompositionParentInference(unittest.TestCase):
         )
         self.assertIsNone(defs["child"]["parent_stream"])
 
-    def test_date_time_parent_key_is_skipped(self):
+    def test_parent_with_date_time_key_is_never_linked(self):
+        _, _, defs = _discover(
+            [
+                ("Parent", ["effDate"], {"effDate": DT}, []),
+                (
+                    "Child",
+                    ["effDate", "seq"],
+                    {"effDate": DT, "seq": STR},
+                    [("parentNav", "Parent_Child", "Parent")],
+                ),
+            ],
+            _assoc("Parent_Child", "Child", "Parent"),
+        )
+        self.assertIsNone(defs["child"]["parent_stream"])
+
+    def test_parent_with_composite_key_is_never_linked(self):
         _, _, defs = _discover(
             [
                 (
@@ -180,9 +200,81 @@ class TestCompositionParentInference(unittest.TestCase):
             ],
             _assoc("Parent_Child", "Child", "Parent"),
         )
-        child = defs["child"]
-        self.assertEqual(child["parent_filter_field"], "parentCode")
-        self.assertEqual(child["parent_key_field"], "parentCode")
+        self.assertIsNone(defs["child"]["parent_stream"])
+
+    def test_non_filterable_child_key_is_never_linked(self):
+        _, _, defs = _discover(
+            [
+                ("Parent", ["userId"], {"userId": STR}, []),
+                (
+                    "Child",
+                    ["userId", "seq"],
+                    {"userId": STR_NOT_FILTERABLE, "seq": STR},
+                    [("parentNav", "Parent_Child", "Parent")],
+                ),
+            ],
+            _assoc("Parent_Child", "Child", "Parent"),
+        )
+        self.assertIsNone(defs["child"]["parent_stream"])
+
+    def test_non_filterable_constraint_field_is_never_linked(self):
+        _, _, defs = _discover(
+            [
+                ("Parent", ["parentId"], {"parentId": STR}, []),
+                (
+                    "Child",
+                    ["childId"],
+                    {"childId": STR, "ownerRef": STR_NOT_FILTERABLE},
+                    [("parentNav", "Parent_Child", "Parent")],
+                ),
+            ],
+            _assoc(
+                "Parent_Child", "Child", "Parent",
+                constraint=_constraint("parentId", "ownerRef"),
+            ),
+        )
+        self.assertIsNone(defs["child"]["parent_stream"])
+
+    def test_multi_key_constraint_is_never_linked(self):
+        constraint = (
+            "<ReferentialConstraint>"
+            '<Principal Role="Parent"><PropertyRef Name="a"/>'
+            '<PropertyRef Name="b"/></Principal>'
+            '<Dependent Role="Child"><PropertyRef Name="ra"/>'
+            '<PropertyRef Name="rb"/></Dependent>'
+            "</ReferentialConstraint>"
+        )
+        _, _, defs = _discover(
+            [
+                ("Parent", ["a", "b"], {"a": STR, "b": STR}, []),
+                (
+                    "Child",
+                    ["childId"],
+                    {"childId": STR, "ra": STR, "rb": STR},
+                    [("parentNav", "Parent_Child", "Parent")],
+                ),
+            ],
+            _assoc("Parent_Child", "Child", "Parent", constraint=constraint),
+        )
+        self.assertIsNone(defs["child"]["parent_stream"])
+
+    def test_constraint_to_date_time_parent_key_is_never_linked(self):
+        _, _, defs = _discover(
+            [
+                ("Parent", ["stamp"], {"stamp": DT}, []),
+                (
+                    "Child",
+                    ["childId"],
+                    {"childId": STR, "ownerStamp": DT},
+                    [("parentNav", "Parent_Child", "Parent")],
+                ),
+            ],
+            _assoc(
+                "Parent_Child", "Child", "Parent",
+                constraint=_constraint("stamp", "ownerStamp"),
+            ),
+        )
+        self.assertIsNone(defs["child"]["parent_stream"])
 
     def test_one_to_many_navigation_is_not_a_candidate(self):
         _, _, defs = _discover(
@@ -297,3 +389,108 @@ class TestCompositionParentInference(unittest.TestCase):
             ),
         )
         self.assertIsNone(defs["child"]["parent_stream"])
+
+
+LMD = "lastModifiedDateTime"
+SYNTHETIC_FLAG = "tap-sap-success-factors.synthetic-replication-key"
+
+
+def _root_metadata(field_metadata, stream):
+    return next(m["metadata"] for m in field_metadata[stream] if not m["breadcrumb"])
+
+
+class TestSyntheticReplicationKey(unittest.TestCase):
+
+    def test_full_table_child_of_incremental_parent_becomes_incremental(self):
+        schemas, field_metadata, defs = _discover(
+            [
+                ("Employment", ["userId"], {"userId": STR, LMD: DT}, []),
+                (
+                    "Job",
+                    ["userId", "seq"],
+                    {"userId": STR, "seq": STR},
+                    [("employmentNav", "Employment_Job", "Employment")],
+                ),
+            ],
+            _assoc("Employment_Job", "Job", "Employment"),
+        )
+        key = f"__parent_employment_{LMD}"
+        self.assertEqual(defs["job"]["replication_method"], "INCREMENTAL")
+        self.assertEqual(defs["job"]["replication_keys"], [key])
+        self.assertEqual(
+            schemas["job"]["properties"][key],
+            {"type": ["null", "string"], "format": "date-time"},
+        )
+        root = _root_metadata(field_metadata, "job")
+        self.assertEqual(root["forced-replication-method"], "INCREMENTAL")
+        self.assertEqual(root["valid-replication-keys"], [key])
+        self.assertTrue(root[SYNTHETIC_FLAG])
+        field = next(
+            m["metadata"] for m in field_metadata["job"]
+            if tuple(m["breadcrumb"]) == ("properties", key)
+        )
+        self.assertEqual(field["inclusion"], "automatic")
+
+    def test_child_with_own_replication_key_is_untouched(self):
+        schemas, field_metadata, defs = _discover(
+            [
+                ("Employment", ["userId"], {"userId": STR, LMD: DT}, []),
+                (
+                    "Job",
+                    ["userId", "seq"],
+                    {"userId": STR, "seq": STR, LMD: DT},
+                    [("employmentNav", "Employment_Job", "Employment")],
+                ),
+            ],
+            _assoc("Employment_Job", "Job", "Employment"),
+        )
+        self.assertEqual(defs["job"]["replication_keys"], [LMD])
+        self.assertNotIn(f"__parent_employment_{LMD}", schemas["job"]["properties"])
+        self.assertNotIn(SYNTHETIC_FLAG, _root_metadata(field_metadata, "job"))
+
+    def test_full_table_child_of_full_table_parent_stays_full_table(self):
+        schemas, field_metadata, defs = _discover(
+            [
+                ("Employment", ["userId"], {"userId": STR}, []),
+                (
+                    "Job",
+                    ["userId", "seq"],
+                    {"userId": STR, "seq": STR},
+                    [("employmentNav", "Employment_Job", "Employment")],
+                ),
+            ],
+            _assoc("Employment_Job", "Job", "Employment"),
+        )
+        self.assertEqual(defs["job"]["replication_method"], "FULL_TABLE")
+        self.assertEqual(defs["job"]["replication_keys"], [])
+        self.assertNotIn(SYNTHETIC_FLAG, _root_metadata(field_metadata, "job"))
+        self.assertNotIn("synthetic_replication_key", defs["job"])
+        self.assertNotIn(f"__parent_employment_{LMD}", schemas["job"]["properties"])
+
+    def test_grandchild_chains_through_the_synthetic_key_of_its_parent(self):
+        schemas, _, defs = _discover(
+            [
+                ("Employment", ["userId"], {"userId": STR, LMD: DT}, []),
+                (
+                    "Job",
+                    ["Employment_userId"],
+                    {"Employment_userId": STR},
+                    [("employmentNav", "Employment_Job", "Employment")],
+                ),
+                (
+                    "Detail",
+                    ["Job_Employment_userId", "line"],
+                    {"Job_Employment_userId": STR, "line": STR},
+                    [("jobNav", "Job_Detail", "Job")],
+                ),
+            ],
+            _assoc("Employment_Job", "Job", "Employment")
+            + _assoc("Job_Detail", "Detail", "Job"),
+        )
+        key = f"__parent_employment_{LMD}"
+        self.assertEqual(defs["detail"]["parent_stream"], "job")
+        self.assertEqual(defs["job"]["replication_keys"], [key])
+        self.assertEqual(
+            defs["detail"]["replication_keys"], [f"__parent_job_{key}"]
+        )
+        self.assertIn(f"__parent_job_{key}", schemas["detail"]["properties"])

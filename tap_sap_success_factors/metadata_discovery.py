@@ -196,10 +196,15 @@ def _is_date_time(properties: Dict[str, Dict], name: str) -> bool:
     return properties.get(name, {}).get("format") == "date-time"
 
 
+def _is_filterable(entity: Dict, name: str) -> bool:
+    """Return True when SAP lets ``name`` appear in an OData $filter."""
+    return name in entity.get("filterable_props", entity.get("properties", {}))
+
+
 def _composition_pair(
     child_type: str, parent_type: str, entity_types: Dict[str, Dict]
 ) -> Optional[Tuple[str, str]]:
-    """Return (child_field, parent_key) when a parent key is embedded in the child's key."""
+    """Return (child_field, parent_key) when the parent's only key is embedded in the child's key."""
     child = entity_types.get(child_type, {})
     parent = entity_types.get(parent_type, {})
     child_keys = child.get("keys", [])
@@ -207,22 +212,26 @@ def _composition_pair(
     parent_props = parent.get("properties", {})
     parent_short = parent_type.rsplit(".", 1)[-1]
 
-    for parent_key in parent.get("keys", []):
-        if _is_date_time(parent_props, parent_key):
+    # One filter value must identify one parent, so composite and date-time
+    # (versioned) parent keys are never linked.
+    parent_keys = parent.get("keys", [])
+    if len(parent_keys) != 1 or _is_date_time(parent_props, parent_keys[0]):
+        return None
+    parent_key = parent_keys[0]
+
+    candidates = [f"{parent_short}_{parent_key}"]
+    if parent_key not in GENERIC_KEY_NAMES:
+        candidates.insert(0, parent_key)
+    for child_field in candidates:
+        if child_field not in child_keys or child_field not in child_props:
             continue
-        candidates = [f"{parent_short}_{parent_key}"]
-        if parent_key not in GENERIC_KEY_NAMES:
-            candidates.insert(0, parent_key)
-        for child_field in candidates:
-            if child_field not in child_keys or child_field not in child_props:
-                continue
-            if _is_date_time(child_props, child_field):
-                continue
-            # A sole key that merely shares the parent's key name is the
-            # child's own identity, not a reference to the parent.
-            if len(child_keys) == 1 and child_field == parent_key:
-                continue
-            return child_field, parent_key
+        if _is_date_time(child_props, child_field) or not _is_filterable(child, child_field):
+            continue
+        # A sole key that merely shares the parent's key name is the
+        # child's own identity, not a reference to the parent.
+        if len(child_keys) == 1 and child_field == parent_key:
+            continue
+        return child_field, parent_key
     return None
 
 
@@ -231,6 +240,7 @@ def _referential_relationship(
     nav: Dict,
     assoc: Dict,
     entity_type_to_set: Dict[str, str],
+    entity_types: Dict[str, Dict],
 ) -> Optional[Dict]:
     """Return the parent link declared by an EDMX ReferentialConstraint, if any."""
     ends = assoc.get("ends", {})
@@ -241,10 +251,25 @@ def _referential_relationship(
     if ends.get(dependent_role, {}).get("type") != entity_type:
         return None
 
-    principal_set = entity_type_to_set.get(ends.get(principal_role, {}).get("type"))
+    parent_type = ends.get(principal_role, {}).get("type")
+    principal_set = entity_type_to_set.get(parent_type)
     dependent_keys = assoc.get("dependent_keys") or []
     principal_keys = assoc.get("principal_keys") or []
     if not (principal_set and dependent_keys and principal_keys):
+        return None
+
+    child = entity_types.get(entity_type, {})
+    parent = entity_types.get(parent_type, {})
+    # Same rules as key composition: a single non-date-time parent key that
+    # maps to one filterable, non-date-time child field.
+    if (
+        len(dependent_keys) != 1
+        or len(principal_keys) != 1
+        or len(parent.get("keys", [])) != 1
+        or _is_date_time(parent.get("properties", {}), principal_keys[0])
+        or _is_date_time(child.get("properties", {}), dependent_keys[0])
+        or not _is_filterable(child, dependent_keys[0])
+    ):
         return None
 
     return {
@@ -269,8 +294,8 @@ def _select_parent_relationship(
     """Pick the parent stream for ``entity_type`` or return None (root stream).
 
     A declared ReferentialConstraint wins.  Otherwise every many-to-one
-    navigation is a candidate, but only if a parent key is embedded in the
-    child's own key (see ``_composition_pair``).  Candidates are scored: +1
+    navigation is a candidate, but only if the parent's single key is embedded
+    in the child's own key (see ``_composition_pair``).  Candidates are scored: +1
     when the target multiplicity is exactly one, +1 when the parent exposes a
     navigation back to the child.  The best score wins; ties keep the first.
     """
@@ -279,7 +304,9 @@ def _select_parent_relationship(
     for nav in navigations:
         assoc = associations.get(nav.get("relationship"))
         if assoc:
-            found = _referential_relationship(entity_type, nav, assoc, entity_type_to_set)
+            found = _referential_relationship(
+                entity_type, nav, assoc, entity_type_to_set, entity_types
+            )
             if found and found["parent_stream"] != to_snake_case(entity_type_to_set.get(entity_type, "")):
                 return found
 
@@ -334,6 +361,66 @@ def _select_parent_relationship(
                 "reverse_nav": reverse_nav,
             }
     return best
+
+
+def synthetic_replication_key_name(parent_stream: str, parent_key: str) -> str:
+    """Name of the replication column a child copies from its parent."""
+    return f"__parent_{parent_stream}_{parent_key}"
+
+
+def _apply_synthetic_replication_keys(
+    schemas: Dict, field_metadata: Dict, stream_defs: Dict
+) -> None:
+    """Make FULL_TABLE children of INCREMENTAL parents INCREMENTAL.
+
+    A child is only fetched for parents that changed, so a FULL_TABLE child
+    would be a partial snapshot.  The child instead carries a date-time column
+    copied from its parent's replication key, which is never sent to SAP as a
+    filter.  Parents are resolved first so chains of children inherit the key.
+    """
+    resolved = set()
+
+    def resolve(name: str) -> None:
+        if name in resolved:
+            return
+        resolved.add(name)
+        sdef = stream_defs[name]
+        parent = sdef["parent_stream"]
+        if not parent or parent not in stream_defs or sdef["expand_parent_entity_set"]:
+            return
+        resolve(parent)
+        pdef = stream_defs[parent]
+        if (
+            sdef["replication_method"] != "FULL_TABLE"
+            or pdef["replication_method"] != "INCREMENTAL"
+            or not pdef["replication_keys"]
+        ):
+            return
+
+        parent_key = pdef["replication_keys"][0]
+        key = synthetic_replication_key_name(parent, parent_key)
+        schemas[name]["properties"][key] = {
+            "type": ["null", "string"],
+            "format": "date-time",
+        }
+        mdata = metadata.to_map(field_metadata[name])
+        mdata = metadata.write(mdata, (), "forced-replication-method", "INCREMENTAL")
+        mdata = metadata.write(mdata, (), "valid-replication-keys", [key])
+        mdata = metadata.write(mdata, (), f"{MDATA_NS}.synthetic-replication-key", True)
+        mdata = metadata.write(mdata, ("properties", key), "inclusion", "automatic")
+        field_metadata[name] = metadata.to_list(mdata)
+        sdef["replication_method"] = "INCREMENTAL"
+        sdef["replication_keys"] = [key]
+        sdef["synthetic_replication_key"] = True
+        LOGGER.info(
+            "Stream %s is INCREMENTAL on synthetic key %s copied from parent %s",
+            name,
+            key,
+            parent,
+        )
+
+    for stream_name in list(stream_defs):
+        resolve(stream_name)
 
 
 def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
@@ -600,16 +687,17 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 relationship_name = None
                 relationship_inference = None
 
-        # A date-time vs non-date-time pair makes an invalid OData $filter
-        # (SAP answers HTTP 400), so such a link is dropped, never repaired.
+        # Date-time link fields are never used: a mismatched pair makes an
+        # invalid OData $filter (SAP answers HTTP 400) and a versioned key does
+        # not identify one parent, so such a link is dropped, never repaired.
         if parent_stream and parent_filter_field and parent_key_field:
             _par_et = stream_to_entity_type.get(parent_stream)
             _par_props = entity_types.get(_par_et, {}).get("properties", {})
             child_is_dt = _is_date_time(properties, parent_filter_field)
             par_is_dt = _is_date_time(_par_props, parent_key_field)
-            if child_is_dt != par_is_dt:
+            if child_is_dt or par_is_dt:
                 LOGGER.warning(
-                    "Dropping parent '%s' for stream '%s': type mismatch between "
+                    "Dropping parent '%s' for stream '%s': date-time link between "
                     "child field '%s' (date-time=%s) and parent key '%s' "
                     "(date-time=%s). Stream will be synced as a root stream.",
                     parent_stream,
@@ -788,6 +876,8 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 if expand_info else None
             ),
         }
+
+    _apply_synthetic_replication_keys(schemas, field_metadata, stream_defs)
 
     LOGGER.info("Dynamic metadata discovery found %s entity sets", len(stream_defs))
     return schemas, field_metadata, stream_defs
