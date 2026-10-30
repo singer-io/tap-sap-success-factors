@@ -906,3 +906,119 @@ class TestCoerceOdataDatetime(unittest.TestCase):
         """Non-string values (None, int) are returned unchanged."""
         self.assertIsNone(self.stream._coerce_odata_datetime(None))
         self.assertEqual(self.stream._coerce_odata_datetime(42), 42)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic replication key: child column copied from the parent record
+# ---------------------------------------------------------------------------
+
+SYNTHETIC_KEY = "__parent_per_person_lastModifiedDateTime"
+
+
+class FakeSyntheticChildCatalog:
+    """Child of per_person that is INCREMENTAL on a key copied from the parent."""
+
+    class _Schema:
+        @staticmethod
+        def to_dict():
+            return {
+                "type": "object",
+                "properties": {
+                    "personIdExternal": {"type": ["null", "string"]},
+                    "seq": {"type": ["null", "string"]},
+                    "__parent_per_person_personIdExternal": {"type": ["null", "string"]},
+                    SYNTHETIC_KEY: {"type": ["null", "string"], "format": "date-time"},
+                },
+            }
+
+    schema = _Schema()
+    stream = "per_email"
+    tap_stream_id = "per_email"
+    key_properties = ["personIdExternal", "seq"]
+    metadata = [
+        {
+            "breadcrumb": [],
+            "metadata": {
+                "selected": True,
+                "tap-sap-success-factors.entity-set": "PerEmail",
+                "parent-tap-stream-id": "per_person",
+                "tap-sap-success-factors.parent-filter-field": "personIdExternal",
+                "tap-sap-success-factors.parent-key-field": "personIdExternal",
+                "valid-replication-keys": [SYNTHETIC_KEY],
+                "forced-replication-method": "INCREMENTAL",
+                "tap-sap-success-factors.synthetic-replication-key": True,
+            },
+        }
+    ]
+
+
+class TestSyntheticReplicationKey(unittest.TestCase):
+
+    def test_flag_is_read_from_metadata(self):
+        self.assertTrue(
+            DynamicStream(client=_client(), catalog=FakeSyntheticChildCatalog())
+            .synthetic_replication_key
+        )
+        self.assertFalse(
+            DynamicStream(client=_client(), catalog=FakePhotoCatalog())
+            .synthetic_replication_key
+        )
+
+    def test_modify_object_copies_parent_replication_value(self):
+        child = DynamicStream(client=_client(), catalog=FakeSyntheticChildCatalog())
+        parent = {
+            "personIdExternal": "1",
+            "lastModifiedDateTime": "2024-03-01T00:00:00.000000Z",
+        }
+        enriched = child.modify_object({"seq": "a"}, parent)
+        self.assertEqual(enriched[SYNTHETIC_KEY], "2024-03-01T00:00:00.000000Z")
+
+    def test_build_params_filters_by_parent_only(self):
+        child = DynamicStream(client=_client(), catalog=FakeSyntheticChildCatalog())
+        params = child.build_params({}, {"personIdExternal": "1"})
+        self.assertEqual(params["$filter"], "personIdExternal eq '1'")
+
+    def test_sync_emits_children_of_unsorted_parents_without_client_side_drop(self):
+        parent_client = _client()
+        parent_client.get.return_value = {
+            "d": {
+                "results": [
+                    {
+                        "personIdExternal": "2",
+                        "lastModifiedDateTime": "2024-05-01T00:00:00.000000Z",
+                    },
+                    {
+                        "personIdExternal": "1",
+                        "lastModifiedDateTime": "2024-02-01T00:00:00.000000Z",
+                    },
+                ],
+                "__next": None,
+            }
+        }
+        child_client = _client()
+        child_client.get.return_value = {
+            "d": {"results": [{"seq": "a"}], "__next": None}
+        }
+        parent = DynamicStream(client=parent_client, catalog=FakeCatalog())
+        child = DynamicStream(client=child_client, catalog=FakeSyntheticChildCatalog())
+        parent.child_to_sync = [child]
+        transformer = Mock()
+        transformer.transform.side_effect = lambda rec, schema, mdata: rec
+        emitted = []
+        state = {}
+
+        with patch(
+            "tap_sap_success_factors.streams.abstracts.write_record",
+            side_effect=lambda stream_id, record, **_: emitted.append((stream_id, record)),
+        ):
+            parent.sync(state=state, transformer=transformer)
+
+        children = [rec for stream_id, rec in emitted if stream_id == "per_email"]
+        self.assertEqual(
+            [rec[SYNTHETIC_KEY] for rec in children],
+            ["2024-05-01T00:00:00.000000Z", "2024-02-01T00:00:00.000000Z"],
+        )
+        self.assertEqual(
+            state["bookmarks"]["per_email"][SYNTHETIC_KEY],
+            "2024-05-01T00:00:00.000000Z",
+        )

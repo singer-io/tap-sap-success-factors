@@ -183,194 +183,244 @@ def _build_association_map(schema_nodes: List[ET.Element]) -> Dict[str, Dict]:
     return associations
 
 
-def _infer_dependent_field(
-    dependent_properties: Dict[str, Dict], principal_keys: List[str], nav_name: Optional[str]
-) -> Optional[str]:
-    """Infer foreign-key field in dependent entity when constraint is absent."""
-    if not principal_keys:
+# Key names that repeat across unrelated entities.  Matching one of these
+# against a same-named child field is coincidence, so they only count when the
+# child carries the prefixed form (<ParentType>_<key>), which SAP generates for
+# keys inherited from a parent.
+GENERIC_KEY_NAMES = {
+    "externalCode", "code", "id", "effectiveStartDate", "startDate", "key", "value",
+}
+
+
+def _is_date_time(properties: Dict[str, Dict], name: str) -> bool:
+    return properties.get(name, {}).get("format") == "date-time"
+
+
+def _is_filterable(entity: Dict, name: str) -> bool:
+    """Return True when SAP lets ``name`` appear in an OData $filter."""
+    return name in entity.get("filterable_props", entity.get("properties", {}))
+
+
+def _composition_pair(
+    child_type: str, parent_type: str, entity_types: Dict[str, Dict]
+) -> Optional[Tuple[str, str]]:
+    """Return (child_field, parent_key) when the parent's only key is embedded in the child's key."""
+    child = entity_types.get(child_type, {})
+    parent = entity_types.get(parent_type, {})
+    child_keys = child.get("keys", [])
+    child_props = child.get("properties", {})
+    parent_props = parent.get("properties", {})
+    parent_short = parent_type.rsplit(".", 1)[-1]
+
+    # One filter value must identify one parent, so composite and date-time
+    # (versioned) parent keys are never linked.
+    parent_keys = parent.get("keys", [])
+    if len(parent_keys) != 1 or _is_date_time(parent_props, parent_keys[0]):
         return None
+    parent_key = parent_keys[0]
 
-    dep_fields = set(dependent_properties.keys())
-
-    # Best case: principal key name exists directly on dependent entity
-    for key in principal_keys:
-        if key in dep_fields:
-            return key
-
-    # Common conventions: <navName><Key>, <navName>Id
-    nav_base = nav_name or ""
-    if nav_base:
-        for key in principal_keys:
-            candidates = [
-                f"{nav_base}{key[:1].upper()}{key[1:]}",
-                f"{nav_base}Id",
-                f"{nav_base}_id",
-            ]
-            for candidate in candidates:
-                if candidate in dep_fields:
-                    return candidate
-
-    return None
-
-
-def _rescue_type_mismatched_filter_field(
-    nav_name: Optional[str],
-    par_is_dt: bool,
-    dependent_properties: Dict[str, Dict],
-) -> Optional[str]:
-    """Find a type-compatible child filter field when the inferred one mismatches.
-
-    Called when ``_infer_dependent_field`` picks a child field whose
-    JSON-Schema type (date-time or not) differs from the parent key field
-    it must be equated to in an OData ``$filter`` clause.
-
-    Strategy
-    --------
-    Derive a candidate FK field name from the navigation property name
-    (e.g. ``countryNav`` → ``country``, ``jobCountryNav`` → ``jobCountry``),
-    then verify it exists on the child entity *and* shares the same
-    date-time-ness as the parent key field.
-
-    Example
-    -------
-    TimeZone.countryNav → Country.  Country PK = (code:String,
-    effectiveStartDate:DateTime).  ``_infer_dependent_field`` wrongly picks
-    ``effectiveStartDate`` (DateTime) because it shares the name with a PK
-    component.  This function strips ``Nav`` from ``countryNav`` → ``country``
-    and finds ``country`` (String) on TimeZone — type-compatible with
-    ``code`` (String) → returns ``'country'``.
-
-    Parameters
-    ----------
-    nav_name:
-        Name of the NavigationProperty that produced the relationship,
-        e.g. ``'countryNav'`` or ``'jobCountryNav'``.
-    par_is_dt:
-        Whether the parent key field has ``format: date-time`` (True) or not.
-    dependent_properties:
-        JSON-Schema property map of the child entity.
-
-    Returns
-    -------
-    str | None
-        Name of a type-compatible child field, or ``None`` if none found.
-    """
-    base = nav_name or ""
-    # Strip recognised Navigation-property suffixes to get the FK base name.
-    for suffix in ("Nav", "nav"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-
-    candidates: List[str] = []
-    if base:
-        candidates.extend([base, f"{base}Id", f"{base}Code"])
-
-    for candidate in candidates:
-        if candidate not in dependent_properties:
+    candidates = [f"{parent_short}_{parent_key}"]
+    if parent_key not in GENERIC_KEY_NAMES:
+        candidates.insert(0, parent_key)
+    for child_field in candidates:
+        if child_field not in child_keys or child_field not in child_props:
             continue
-        cand_is_dt = (
-            dependent_properties[candidate].get("format") == "date-time"
-        )
-        if cand_is_dt == par_is_dt:
-            return candidate
-
+        if _is_date_time(child_props, child_field) or not _is_filterable(child, child_field):
+            continue
+        # A sole key that merely shares the parent's key name is the
+        # child's own identity, not a reference to the parent.
+        if len(child_keys) == 1 and child_field == parent_key:
+            continue
+        return child_field, parent_key
     return None
 
 
-def _infer_parent_relationship(
+def _referential_relationship(
     entity_type: str,
     nav: Dict,
     assoc: Dict,
     entity_type_to_set: Dict[str, str],
     entity_types: Dict[str, Dict],
-) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
-    """Infer parent relationship details for current entity.
-
-    Returns: (parent_stream, parent_filter_field, parent_key_field, relationship_name, inference_mode)
-    """
+) -> Optional[Dict]:
+    """Return the parent link declared by an EDMX ReferentialConstraint, if any."""
     ends = assoc.get("ends", {})
     dependent_role = assoc.get("dependent_role")
     principal_role = assoc.get("principal_role")
+    if not (dependent_role and principal_role):
+        return None
+    if ends.get(dependent_role, {}).get("type") != entity_type:
+        return None
 
-    # Path 1: Referential constraint available (authoritative)
-    if dependent_role and principal_role:
-        dependent_end = ends.get(dependent_role, {})
-        principal_end = ends.get(principal_role, {})
+    parent_type = ends.get(principal_role, {}).get("type")
+    principal_set = entity_type_to_set.get(parent_type)
+    dependent_keys = assoc.get("dependent_keys") or []
+    principal_keys = assoc.get("principal_keys") or []
+    if not (principal_set and dependent_keys and principal_keys):
+        return None
 
-        if dependent_end.get("type") != entity_type:
-            return None, None, None, None, None
+    child = entity_types.get(entity_type, {})
+    parent = entity_types.get(parent_type, {})
+    # Same rules as key composition: a single non-date-time parent key that
+    # maps to one filterable, non-date-time child field.
+    if (
+        len(dependent_keys) != 1
+        or len(principal_keys) != 1
+        or len(parent.get("keys", [])) != 1
+        or _is_date_time(parent.get("properties", {}), principal_keys[0])
+        or _is_date_time(child.get("properties", {}), dependent_keys[0])
+        or not _is_filterable(child, dependent_keys[0])
+    ):
+        return None
 
-        principal_type = principal_end.get("type")
-        principal_set = entity_type_to_set.get(principal_type)
-        if not principal_set:
-            return None, None, None, None, None
+    return {
+        "parent_stream": to_snake_case(principal_set),
+        "filter_field": dependent_keys[0],
+        "key_field": principal_keys[0],
+        "nav_name": nav.get("name"),
+        "relationship": nav.get("relationship"),
+        "inference": "referential_constraint",
+        "target_multiplicity": None,
+        "reverse_nav": None,
+    }
 
-        dependent_keys = assoc.get("dependent_keys") or []
-        principal_keys = assoc.get("principal_keys") or []
-        if not dependent_keys or not principal_keys:
-            return None, None, None, None, None
 
-        return (
-            to_snake_case(principal_set),
-            dependent_keys[0],
-            principal_keys[0],
-            nav.get("relationship"),
-            "referential_constraint",
+def _select_parent_relationship(
+    entity_type: str,
+    associations: Dict[str, Dict],
+    entity_navigations: Dict[str, List[Dict]],
+    entity_type_to_set: Dict[str, str],
+    entity_types: Dict[str, Dict],
+) -> Optional[Dict]:
+    """Pick the parent stream for ``entity_type`` or return None (root stream).
+
+    A declared ReferentialConstraint wins.  Otherwise every many-to-one
+    navigation is a candidate, but only if the parent's single key is embedded
+    in the child's own key (see ``_composition_pair``).  Candidates are scored: +1
+    when the target multiplicity is exactly one, +1 when the parent exposes a
+    navigation back to the child.  The best score wins; ties keep the first.
+    """
+    navigations = entity_navigations.get(entity_type, [])
+
+    for nav in navigations:
+        assoc = associations.get(nav.get("relationship"))
+        if assoc:
+            found = _referential_relationship(
+                entity_type, nav, assoc, entity_type_to_set, entity_types
+            )
+            if found and found["parent_stream"] != to_snake_case(entity_type_to_set.get(entity_type, "")):
+                return found
+
+    best: Optional[Dict] = None
+    best_score = -1
+    for nav in navigations:
+        assoc = associations.get(nav.get("relationship"))
+        if not assoc:
+            continue
+        ends = assoc.get("ends", {})
+        current_end = ends.get(nav.get("from_role"))
+        target_end = ends.get(nav.get("to_role"))
+        if not current_end or not target_end:
+            continue
+        if not (
+            current_end.get("multiplicity") == "*"
+            and target_end.get("multiplicity") in {"1", "0..1"}
+        ):
+            continue
+
+        parent_type = target_end.get("type")
+        parent_set = entity_type_to_set.get(parent_type)
+        if parent_type == entity_type or not parent_set:
+            continue
+
+        pair = _composition_pair(entity_type, parent_type, entity_types)
+        if not pair:
+            continue
+
+        reverse_nav = next(
+            (
+                parent_nav.get("name")
+                for parent_nav in entity_navigations.get(parent_type, [])
+                if associations.get(parent_nav.get("relationship"), {})
+                .get("ends", {})
+                .get(parent_nav.get("to_role"), {})
+                .get("type") == entity_type
+            ),
+            None,
+        )
+        score = (1 if target_end.get("multiplicity") == "1" else 0) + (1 if reverse_nav else 0)
+        if score > best_score:
+            best_score = score
+            best = {
+                "parent_stream": to_snake_case(parent_set),
+                "filter_field": pair[0],
+                "key_field": pair[1],
+                "nav_name": nav.get("name"),
+                "relationship": nav.get("relationship"),
+                "inference": "key_composition",
+                "target_multiplicity": target_end.get("multiplicity"),
+                "reverse_nav": reverse_nav,
+            }
+    return best
+
+
+def synthetic_replication_key_name(parent_stream: str, parent_key: str) -> str:
+    """Name of the replication column a child copies from its parent."""
+    return f"__parent_{parent_stream}_{parent_key}"
+
+
+def _apply_synthetic_replication_keys(
+    schemas: Dict, field_metadata: Dict, stream_defs: Dict
+) -> None:
+    """Make FULL_TABLE children of INCREMENTAL parents INCREMENTAL.
+
+    A child is only fetched for parents that changed, so a FULL_TABLE child
+    would be a partial snapshot.  The child instead carries a date-time column
+    copied from its parent's replication key, which is never sent to SAP as a
+    filter.  Parents are resolved first so chains of children inherit the key.
+    """
+    resolved = set()
+
+    def resolve(name: str) -> None:
+        if name in resolved:
+            return
+        resolved.add(name)
+        sdef = stream_defs[name]
+        parent = sdef["parent_stream"]
+        if not parent or parent not in stream_defs or sdef["expand_parent_entity_set"]:
+            return
+        resolve(parent)
+        pdef = stream_defs[parent]
+        if (
+            sdef["replication_method"] != "FULL_TABLE"
+            or pdef["replication_method"] != "INCREMENTAL"
+            or not pdef["replication_keys"]
+        ):
+            return
+
+        parent_key = pdef["replication_keys"][0]
+        key = synthetic_replication_key_name(parent, parent_key)
+        schemas[name]["properties"][key] = {
+            "type": ["null", "string"],
+            "format": "date-time",
+        }
+        mdata = metadata.to_map(field_metadata[name])
+        mdata = metadata.write(mdata, (), "forced-replication-method", "INCREMENTAL")
+        mdata = metadata.write(mdata, (), "valid-replication-keys", [key])
+        mdata = metadata.write(mdata, (), f"{MDATA_NS}.synthetic-replication-key", True)
+        mdata = metadata.write(mdata, ("properties", key), "inclusion", "automatic")
+        field_metadata[name] = metadata.to_list(mdata)
+        sdef["replication_method"] = "INCREMENTAL"
+        sdef["replication_keys"] = [key]
+        sdef["synthetic_replication_key"] = True
+        LOGGER.info(
+            "Stream %s is INCREMENTAL on synthetic key %s copied from parent %s",
+            name,
+            key,
+            parent,
         )
 
-    # Path 2: No referential constraint, infer from multiplicity and nav roles
-    from_role = nav.get("from_role")
-    to_role = nav.get("to_role")
-
-    if from_role in ends and to_role in ends:
-        current_end = ends[from_role]
-        target_end = ends[to_role]
-    else:
-        # Fallback match by type (if roles are not present)
-        current_end = None
-        target_end = None
-        for end_data in ends.values():
-            if end_data.get("type") == entity_type:
-                current_end = end_data
-            else:
-                target_end = end_data
-        if current_end is None or target_end is None:
-            return None, None, None, None, None
-
-    current_mult = current_end.get("multiplicity")
-    target_mult = target_end.get("multiplicity")
-    target_type = target_end.get("type")
-
-    # Current entity is child when current is many and target is one/optional one
-    if not (current_mult == "*" and target_mult in {"1", "0..1"}):
-        return None, None, None, None, None
-
-    parent_set = entity_type_to_set.get(target_type)
-    if not parent_set:
-        return None, None, None, None, None
-
-    parent_entity_data = entity_types.get(target_type, {})
-    principal_keys = parent_entity_data.get("keys", [])
-    if not principal_keys:
-        return None, None, None, None, None
-
-    dependent_properties = entity_types.get(entity_type, {}).get("properties", {})
-    dependent_field = _infer_dependent_field(
-        dependent_properties,
-        principal_keys,
-        nav_name=nav.get("name"),
-    )
-    if not dependent_field:
-        return None, None, None, None, None
-
-    return (
-        to_snake_case(parent_set),
-        dependent_field,
-        principal_keys[0],
-        nav.get("relationship"),
-        "multiplicity_heuristic",
-    )
+    for stream_name in list(stream_defs):
+        resolve(stream_name)
 
 
 def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
@@ -551,36 +601,31 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
         relationship_name = None
 
         relationship_inference = None
-        # Name of the NavigationProperty that produced the accepted
-        # relationship; used later for type-mismatch rescue.
-        matched_nav_name: Optional[str] = None
-        for nav in entity_navigations.get(entity_type, []):
-            assoc = associations.get(nav.get("relationship"))
-            if not assoc:
-                continue
-
-            (
+        inferred = _select_parent_relationship(
+            entity_type,
+            associations,
+            entity_navigations,
+            entity_type_to_set,
+            entity_types,
+        )
+        if inferred and inferred["parent_stream"] != stream_name:
+            parent_stream = inferred["parent_stream"]
+            parent_filter_field = inferred["filter_field"]
+            parent_key_field = inferred["key_field"]
+            relationship_name = inferred["relationship"]
+            relationship_inference = inferred["inference"]
+            LOGGER.info(
+                "Parent relationship for %s: parent=%s child_field=%s parent_key=%s "
+                "nav=%s target_multiplicity=%s reverse_nav=%s mode=%s",
+                stream_name,
                 parent_stream,
                 parent_filter_field,
                 parent_key_field,
-                relationship_name,
+                inferred["nav_name"],
+                inferred["target_multiplicity"],
+                inferred["reverse_nav"],
                 relationship_inference,
-            ) = _infer_parent_relationship(
-                entity_type,
-                nav,
-                assoc,
-                entity_type_to_set,
-                entity_types,
             )
-            if parent_stream == stream_name:
-                parent_stream = None
-                parent_filter_field = None
-                parent_key_field = None
-                relationship_name = None
-                relationship_inference = None
-            if parent_stream:
-                matched_nav_name = nav.get("name")
-                break
 
         # ------------------------------------------------------------------
         # Group 4: Apply hardcoded parent overrides when EDMX inference could
@@ -642,131 +687,33 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 relationship_name = None
                 relationship_inference = None
 
-        # ------------------------------------------------------------------
-        # Type-compatibility guard: when the inferred parent_filter_field
-        # (child-side) and parent_key_field (parent-side) have incompatible
-        # JSON Schema types the OData $filter clause would be invalid.
-        #
-        # Classic false-positive (no ReferentialConstraint):
-        #   TimeZone.countryNav → Country  (PK: code:String,
-        #                                       effectiveStartDate:DateTime)
-        #   _infer_dependent_field finds effectiveStartDate on TimeZone
-        #   → parent_filter_field='effectiveStartDate' (DateTime)
-        #   → parent_key_field='code' (String)
-        #   → $filter: effectiveStartDate eq 'BTN'  ← SAP rejects (HTTP 400)
-        #
-        # Rescue strategy
-        # ---------------
-        # Before giving up, attempt to find a *type-compatible* child field
-        # by stripping the "Nav" suffix from the nav property name and
-        # looking for that base name on the child entity:
-        #   countryNav → country (String on TimeZone) ← type-compatible ✓
-        #   jobCountryNav → jobCountry (String on PaymentInformationV3) ✓
-        # If a compatible field is found it replaces parent_filter_field.
-        # Only when no rescue field exists is the relationship dropped.
-        # ------------------------------------------------------------------
+        # Date-time link fields are never used: a mismatched pair makes an
+        # invalid OData $filter (SAP answers HTTP 400) and a versioned key does
+        # not identify one parent, so such a link is dropped, never repaired.
         if parent_stream and parent_filter_field and parent_key_field:
-            child_fld_schema = properties.get(parent_filter_field, {})
             _par_et = stream_to_entity_type.get(parent_stream)
-            _par_props = (
-                entity_types.get(_par_et, {}).get("properties", {})
-            )
-            par_fld_schema = _par_props.get(parent_key_field, {})
-            child_is_dt = child_fld_schema.get("format") == "date-time"
-            par_is_dt = par_fld_schema.get("format") == "date-time"
-            if child_is_dt != par_is_dt:
-                # ----------------------------------------------------------
-                # Two-stage rescue strategy:
-                #
-                # Stage 1 (Option B) — only when the parent's first PK is
-                # DateTime but the child FK is String: scan the remaining
-                # parent PKs for a non-DateTime one and use it instead.
-                # e.g. PickListValueV2 PK order:
-                #   [PickListV2_effectiveStartDate(DateTime),  ← wrong
-                #    PickListV2_id(String)]                    ← correct
-                # Child FK (e.g. defaultEmployeeClass) is String, so we
-                # swap parent_key_field to the first non-DateTime PK.
-                #
-                # Stage 2 — only when the child FK is DateTime but the
-                # parent PK is String: strip the NavigationProperty's Nav
-                # suffix to find a String-typed FK on the child entity.
-                # e.g. TimeZone.countryNav → 'country' (String) replaces
-                # the wrongly-inferred 'effectiveStartDate' (DateTime).
-                # ----------------------------------------------------------
-                alt_par_key = None
-                if par_is_dt and not child_is_dt:
-                    # Stage 1: find a non-DateTime alternate parent PK.
-                    _par_keys = entity_types.get(_par_et, {}).get("keys", [])
-                    alt_par_key = next(
-                        (
-                            pk for pk in _par_keys
-                            if pk != parent_key_field
-                            and (
-                                _par_props.get(pk, {}).get("format")
-                                == "date-time"
-                            ) == child_is_dt  # child_is_dt is False here
-                        ),
-                        None,
-                    )
-
-                rescued_filter = None
-                if not alt_par_key:
-                    # Stage 2: try nav-name rescue on the child side.
-                    rescued_filter = _rescue_type_mismatched_filter_field(
-                        matched_nav_name,
-                        par_is_dt,
-                        properties,
-                    )
-
-                if alt_par_key:
-                    LOGGER.info(
-                        "Rescued parent relationship '%s' → '%s': "
-                        "replaced type-mismatched parent_key_field '%s' "
-                        "(date-time=%s) with alternate PK '%s' "
-                        "(type-compatible with parent_filter_field '%s')",
-                        stream_name,
-                        parent_stream,
-                        parent_key_field,
-                        par_is_dt,
-                        alt_par_key,
-                        parent_filter_field,
-                    )
-                    parent_key_field = alt_par_key
-                elif rescued_filter:
-                    LOGGER.info(
-                        "Rescued parent relationship '%s' → '%s': "
-                        "replaced type-mismatched parent_filter_field "
-                        "'%s' (date-time=%s) with '%s' "
-                        "(type-compatible with parent_key_field '%s')",
-                        stream_name,
-                        parent_stream,
-                        parent_filter_field,
-                        child_is_dt,
-                        rescued_filter,
-                        parent_key_field,
-                    )
-                    parent_filter_field = rescued_filter
-                else:
-                    LOGGER.warning(
-                        "Dropping parent '%s' for stream '%s': "
-                        "type mismatch — parent_filter_field '%s' "
-                        "(date-time=%s) vs parent_key_field '%s' "
-                        "(date-time=%s) and no rescue field found. "
-                        "Stream will be synced as FULL_TABLE.",
-                        parent_stream,
-                        stream_name,
-                        parent_filter_field,
-                        child_is_dt,
-                        parent_key_field,
-                        par_is_dt,
-                    )
-                    parent_stream = None
-                    parent_filter_field = None
-                    parent_key_field = None
-                    parent_secondary_filter_field = None
-                    parent_secondary_key_field = None
-                    relationship_name = None
-                    relationship_inference = None
+            _par_props = entity_types.get(_par_et, {}).get("properties", {})
+            child_is_dt = _is_date_time(properties, parent_filter_field)
+            par_is_dt = _is_date_time(_par_props, parent_key_field)
+            if child_is_dt or par_is_dt:
+                LOGGER.warning(
+                    "Dropping parent '%s' for stream '%s': date-time link between "
+                    "child field '%s' (date-time=%s) and parent key '%s' "
+                    "(date-time=%s). Stream will be synced as a root stream.",
+                    parent_stream,
+                    stream_name,
+                    parent_filter_field,
+                    child_is_dt,
+                    parent_key_field,
+                    par_is_dt,
+                )
+                parent_stream = None
+                parent_filter_field = None
+                parent_key_field = None
+                parent_secondary_filter_field = None
+                parent_secondary_key_field = None
+                relationship_name = None
+                relationship_inference = None
 
         if parent_stream and parent_key_field:
             parent_entity_type = stream_to_entity_type.get(parent_stream)
@@ -929,6 +876,8 @@ def discover_dynamic_streams(client) -> Tuple[Dict, Dict, Dict]:
                 if expand_info else None
             ),
         }
+
+    _apply_synthetic_replication_keys(schemas, field_metadata, stream_defs)
 
     LOGGER.info("Dynamic metadata discovery found %s entity sets", len(stream_defs))
     return schemas, field_metadata, stream_defs

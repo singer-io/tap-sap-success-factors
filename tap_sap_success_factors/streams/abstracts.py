@@ -46,6 +46,9 @@ class BaseStream(ABC):
     sortable_key_properties = []
     replication_method = "FULL_TABLE"
     replication_keys = []
+    # True when the replication key is a column copied from the parent record
+    # (see metadata_discovery._apply_synthetic_replication_keys); SAP has no such field.
+    synthetic_replication_key = False
     entity = ""
     parent = ""
     children = []
@@ -95,7 +98,11 @@ class BaseStream(ABC):
         ):
             params["$orderby"] = ",".join(self.key_properties)
 
-        if self.replication_method == "INCREMENTAL" and self.replication_keys:
+        if (
+            self.replication_method == "INCREMENTAL"
+            and self.replication_keys
+            and not self.synthetic_replication_key
+        ):
             key = self.replication_keys[0]
             bookmark = self.effective_bookmark or self.get_bookmark(
                 state,
@@ -225,6 +232,11 @@ class BaseStream(ABC):
         """Allow child streams to enrich records."""
         if not _parent_record or not self.parent:
             return record
+
+        if self.synthetic_replication_key:
+            synthetic_key = self.replication_keys[0]
+            source_key = synthetic_key[len(f"__parent_{self.parent}_"):]
+            record[synthetic_key] = _parent_record.get(source_key)
 
         parent_pk_field = self.parent_key_field
         if not parent_pk_field or parent_pk_field not in _parent_record:
@@ -361,7 +373,7 @@ class BaseStream(ABC):
                     else None
                 )
 
-                if bookmark_key and bookmark:
+                if bookmark_key and bookmark and not self.synthetic_replication_key:
                     record_passes_bookmark = bool(
                         record_value and record_value >= bookmark
                     )
