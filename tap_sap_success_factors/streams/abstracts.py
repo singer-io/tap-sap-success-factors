@@ -60,6 +60,9 @@ class BaseStream(ABC):
     # expand_parent_entity_set instead of querying the entity set directly.
     expand_nav_property = ""
     expand_parent_entity_set = ""
+    # Nav properties expanded on this stream's own query and flattened
+    # inline into the record (e.g. "emailTypeNav" -> "emailTypeNav_<field>").
+    flatten_nav_properties = []
     path = ""
 
     def __init__(self, client=None, catalog=None) -> None:
@@ -84,6 +87,28 @@ class BaseStream(ABC):
         """Return whether stream is selected in catalog metadata."""
         return metadata.get(self.metadata, (), "selected")
 
+    def selected_flatten_nav_properties(self):
+        """Return expansions needed by selected fields on a selected stream."""
+        if not self.is_selected():
+            return []
+
+        schema_properties = self.schema.get("properties", {})
+        selected_navs = []
+        for nav_name in self.flatten_nav_properties:
+            nav_prefix = f"{nav_name}_"
+            for field_name in schema_properties:
+                if not field_name.startswith(nav_prefix):
+                    continue
+                breadcrumb = ("properties", field_name)
+                inclusion = metadata.get(self.metadata, breadcrumb, "inclusion")
+                selected = metadata.get(self.metadata, breadcrumb, "selected")
+                if inclusion == "automatic" or (
+                    inclusion != "unsupported" and selected is not False
+                ):
+                    selected_navs.append(nav_name)
+                    break
+        return selected_navs
+
     def build_params(self, state: Dict, parent_obj: Dict = None) -> Dict:
         """Build OData query params for stream fetch."""
         params: Dict[str, Any] = {}
@@ -94,6 +119,10 @@ class BaseStream(ABC):
             and not self.expand_nav_property
         ):
             params["$orderby"] = ",".join(self.key_properties)
+
+        flatten_navs = self.selected_flatten_nav_properties()
+        if flatten_navs and not self.expand_nav_property:
+            params["$expand"] = ",".join(flatten_navs)
 
         if self.replication_method == "INCREMENTAL" and self.replication_keys:
             key = self.replication_keys[0]
@@ -221,6 +250,55 @@ class BaseStream(ABC):
         """Normalize all date-time fields in a record before Singer transformation."""
         return self._normalize_datetimes_with_schema(record, self.schema)
 
+    def flatten_nav_data(self, record: Dict) -> Dict:
+        """Inline-flatten $expand-ed Nav properties into the record.
+
+        For each nav in ``flatten_nav_properties`` the raw OData payload is
+        the related entity's full object (not a ``__deferred`` link, since
+        ``build_params`` requested ``$expand`` for it). Its scalar fields
+        are hoisted onto this record as ``<nav>_<field>``; any of ITS OWN
+        still-unexpanded navigation properties collapse to a single
+        ``<nav>_<subNav>_deferred_uri`` placeholder (one level deep only,
+        matching the discovery-time schema).
+
+        The ``__metadata`` envelope ({"uri", "type"}) is flattened to
+        ``metadata_uri``/``metadata_type`` (``<nav>_metadata_*`` for navs), and
+        every remaining unexpanded top-level nav becomes ``<nav>_deferred_uri``.
+        """
+        self._flatten_metadata_envelope(record, "")
+        for nav_name in self.flatten_nav_properties:
+            if nav_name not in record:
+                continue
+            nav_data = record[nav_name]
+            if not isinstance(nav_data, dict) or "__deferred" in nav_data:
+                continue  # expand failed/absent — leave the raw value as-is
+            del record[nav_name]
+            self._flatten_metadata_envelope(nav_data, f"{nav_name}_", record)
+            for key, value in nav_data.items():
+                if isinstance(value, dict) and "__deferred" in value:
+                    record[f"{nav_name}_{key}_deferred_uri"] = value["__deferred"].get("uri")
+                else:
+                    record[f"{nav_name}_{key}"] = value
+
+        for key, value in list(record.items()):
+            if isinstance(value, dict) and "__deferred" in value:
+                record[f"{key}_deferred_uri"] = value["__deferred"].get("uri")
+                del record[key]
+        return record
+
+    @staticmethod
+    def _flatten_metadata_envelope(source: Dict, prefix: str, target: Dict = None) -> None:
+        """Move ``source['__metadata']`` into ``<prefix>metadata_type/uri`` on *target*.
+
+        *target* defaults to *source*. The envelope is always removed from *source*.
+        """
+        envelope = source.pop("__metadata", None)
+        if not isinstance(envelope, dict):
+            return
+        target = source if target is None else target
+        target.setdefault(f"{prefix}metadata_type", envelope.get("type"))
+        target.setdefault(f"{prefix}metadata_uri", envelope.get("uri"))
+
     def modify_object(self, record: Dict, _parent_record: Dict = None) -> Dict:
         """Allow child streams to enrich records."""
         if not _parent_record or not self.parent:
@@ -347,6 +425,7 @@ class BaseStream(ABC):
 
         with metrics.record_counter(self.tap_stream_id) as counter:
             for record in self.get_records(state=state, parent_obj=parent_obj):
+                record = self.flatten_nav_data(record)
                 record = self.modify_object(record, parent_obj)
                 record = self.normalize_record_datetimes(copy.deepcopy(record))
                 transformed_record = transformer.transform(

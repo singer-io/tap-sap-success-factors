@@ -1,5 +1,6 @@
 """Unit tests for tap_sap_success_factors.stream_probe."""
 import unittest
+from threading import Barrier
 from unittest.mock import MagicMock, Mock, patch
 
 import requests
@@ -160,6 +161,22 @@ class TestProbeStream(unittest.TestCase):
         self.assertEqual(params["$top"], "1")
         self.assertEqual(params["$format"], "json")
         self.assertEqual(call_kwargs[1]["timeout"], PROBE_TIMEOUT)
+
+    @patch("tap_sap_success_factors.stream_probe.requests.get")
+    def test_expand_parameter_is_forwarded(self, mock_get):
+        mock_get.return_value = _mock_response(200)
+
+        probe_stream(
+            "Bearer tok",
+            "https://api.example.com",
+            "person",
+            "/odata/v2/Person",
+            {"$expand": "emailTypeNav"},
+        )
+
+        self.assertEqual(
+            mock_get.call_args[1]["params"]["$expand"], "emailTypeNav"
+        )
 
     @patch("tap_sap_success_factors.stream_probe.requests.get")
     def test_auth_header_forwarded(self, mock_get):
@@ -375,6 +392,7 @@ class TestProbeAllStreams(unittest.TestCase):
                 },
                 "expand_parent_entity_set": None,
                 "replication_keys": [],
+                "flatten_nav_properties": ["statusNav"],
             },
             "employee_time_mex": {
                 "path": "/odata/v2/EmployeeTimeMEX",
@@ -422,6 +440,7 @@ class TestProbeAllStreams(unittest.TestCase):
         # String -> eq '<user_id>'
         gps = _extra(calls_by_name["goal_plan_state"])
         self.assertEqual(gps.get("$filter"), "userId eq 'testuser'")
+        self.assertEqual(gps.get("$expand"), "statusNav")
 
         # Integer -> eq 0
         etm = _extra(calls_by_name["employee_time_mex"])
@@ -433,6 +452,198 @@ class TestProbeAllStreams(unittest.TestCase):
             nre.get("$filter"),
             "startDate ge datetime'2000-01-01T00:00:00'",
         )
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_direct_probe_retains_stream_when_expansion_is_rejected(
+        self, mock_probe
+    ):
+        def _reject_expansion(auth, base, name, path, extra_params=None):
+            rejected = bool(extra_params and extra_params.get("$expand"))
+            return {
+                "stream": name,
+                "status": 400 if rejected else 200,
+                "error": "Unsupported expansion" if rejected else None,
+            }
+
+        mock_probe.side_effect = _reject_expansion
+        client = _mock_client()
+        stream_defs = {
+            "person": {
+                "path": "/odata/v2/Person",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "replication_keys": [],
+                "flatten_nav_properties": ["emailTypeNav"],
+            }
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+        self.assertEqual(
+            mock_probe.call_args_list[0][0][4]["$expand"], "emailTypeNav"
+        )
+        self.assertIsNone(mock_probe.call_args_list[1][0][4])
+        self.assertEqual(
+            stream_defs["person"]["rejected_flatten_nav_properties"],
+            ["emailTypeNav"],
+        )
+        self.assertEqual(stream_defs["person"]["flatten_nav_properties"], [])
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_child_probe_detects_rejected_expansion_with_control_request(
+        self, mock_probe
+    ):
+        def _side_effect(auth, base, name, path, extra_params=None):
+            rejected = bool(extra_params and extra_params.get("$expand"))
+            return {
+                "stream": name,
+                "status": 400 if rejected else 200,
+                "error": "Unsupported expansion" if rejected else None,
+            }
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = {
+            "child": {
+                "path": "/odata/v2/Child",
+                "parent_filter_field": "parentId",
+                "parent_filter_field_schema": {"type": ["null", "string"]},
+                "expand_parent_entity_set": None,
+                "replication_keys": [],
+                "flatten_nav_properties": ["statusNav"],
+            }
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+        self.assertEqual(mock_probe.call_count, 2)
+        expanded_params = mock_probe.call_args_list[0][0][4]
+        control_params = mock_probe.call_args_list[1][0][4]
+        self.assertEqual(expanded_params["$expand"], "statusNav")
+        self.assertNotIn("$expand", control_params)
+        self.assertEqual(control_params["$filter"], "parentId eq 'testuser'")
+        self.assertEqual(
+            stream_defs["child"]["rejected_flatten_nav_properties"],
+            ["statusNav"],
+        )
+        self.assertEqual(stream_defs["child"]["flatten_nav_properties"], [])
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_rejected_probe_expansions_are_isolated_per_navigation(
+        self, mock_probe
+    ):
+        def _side_effect(auth, base, name, path, extra_params=None):
+            expansion = (extra_params or {}).get("$expand")
+            if expansion == "unsupportedNav":
+                status = 403
+            elif expansion == "supportedNav":
+                status = 200
+            else:
+                status = 400 if expansion else 200
+            return {
+                "stream": name,
+                "status": status,
+                "error": "rejected" if status >= 400 else None,
+            }
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = {
+            "person": {
+                "path": "/odata/v2/Person",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "replication_keys": [],
+                "flatten_nav_properties": ["unsupportedNav", "supportedNav"],
+            }
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+        self.assertEqual(
+            stream_defs["person"]["rejected_flatten_nav_properties"],
+            ["unsupportedNav"],
+        )
+        self.assertEqual(
+            stream_defs["person"]["flatten_nav_properties"], ["supportedNav"]
+        )
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_combined_success_retains_supported_navs_when_one_is_rejected(
+        self, mock_probe
+    ):
+        def _side_effect(auth, base, name, path, extra_params=None):
+            expansion = (extra_params or {}).get("$expand")
+            if expansion == "unsupportedNav":
+                status = 403
+            elif expansion in (
+                "supportedNavA",
+                "supportedNavB",
+                "supportedNavA,supportedNavB",
+            ):
+                status = 200
+            else:
+                status = 400 if expansion else 200
+            return {
+                "stream": name,
+                "status": status,
+                "error": "rejected" if status >= 400 else None,
+            }
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = {
+            "person": {
+                "path": "/odata/v2/Person",
+                "parent_filter_field": None,
+                "parent_filter_field_schema": {},
+                "expand_parent_entity_set": None,
+                "replication_keys": [],
+                "flatten_nav_properties": [
+                    "unsupportedNav",
+                    "supportedNavA",
+                    "supportedNavB",
+                ],
+            }
+        }
+
+        excluded = probe_all_streams(client, stream_defs)
+
+        self.assertEqual(excluded, set())
+        self.assertEqual(
+            stream_defs["person"]["rejected_flatten_nav_properties"],
+            ["unsupportedNav"],
+        )
+        self.assertEqual(
+            stream_defs["person"]["flatten_nav_properties"],
+            ["supportedNavA", "supportedNavB"],
+        )
+
+    @patch("tap_sap_success_factors.stream_probe.probe_stream")
+    def test_fallback_base_probes_run_concurrently(self, mock_probe):
+        controls = Barrier(2)
+
+        def _side_effect(auth, base, name, path, extra_params=None):
+            if (extra_params or {}).get("$expand"):
+                return {"stream": name, "status": 400, "error": "rejected"}
+            controls.wait(timeout=5)
+            return {"stream": name, "status": 200, "error": None}
+
+        mock_probe.side_effect = _side_effect
+        client = _mock_client()
+        stream_defs = self._stream_defs(["first", "second"])
+        for stream_def in stream_defs.values():
+            stream_def["flatten_nav_properties"] = ["lookupNav"]
+
+        excluded = probe_all_streams(client, stream_defs, max_workers=2)
+
+        self.assertEqual(excluded, set())
+        self.assertFalse(controls.broken)
 
     @patch("tap_sap_success_factors.stream_probe.probe_stream")
     def test_child_403_is_excluded(self, mock_probe):
