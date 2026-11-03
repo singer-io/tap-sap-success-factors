@@ -1,7 +1,10 @@
 import singer
 from singer.catalog import Catalog, CatalogEntry, Schema
 
-from tap_sap_success_factors.metadata_discovery import discover_dynamic_streams
+from tap_sap_success_factors.metadata_discovery import (
+    MDATA_NS,
+    discover_dynamic_streams,
+)
 from tap_sap_success_factors.stream_probe import probe_all_streams
 
 LOGGER = singer.get_logger()
@@ -18,11 +21,10 @@ def discover(client=None) -> Catalog:
 
     Phase 2 — Discovery-time probe validation
         Send a ``$top=1`` GET to every entity set endpoint.  Streams whose
-        endpoint unconditionally returns HTTP 4xx/5xx are removed from the catalog
-        before it is emitted.  This prevents downstream sync runs from wasting
-        time retrying endpoints that SAP will never serve (e.g. navigation-only
-        entities that require ``COE0018`` composite-key filters, or
-        ``COE0025`` query-unsupported entities).
+        base query is not readable are removed from the catalog before it is
+        emitted. If an optional navigation expansion is rejected while the
+        base entity remains readable, only that navigation's fields are marked
+        unsupported.
     """
     if client is None:
         raise ValueError("Client is required for dynamic discovery")
@@ -32,6 +34,33 @@ def discover(client=None) -> Catalog:
 
     # Phase 2: probe each stream; collect those that return HTTP 4xx/5xx
     excluded_streams = probe_all_streams(client, stream_defs)
+
+    # A failed optional $expand should disable only its flattened fields,
+    # not remove an otherwise-readable stream from the catalog.
+    for stream_name, stream_def in stream_defs.items():
+        rejected_navs = stream_def.get("rejected_flatten_nav_properties") or []
+        if not rejected_navs:
+            continue
+
+        mdata = singer.metadata.to_map(field_metadata[stream_name])
+        properties = schemas[stream_name]["properties"]
+        for nav_name in rejected_navs:
+            prefix = f"{nav_name}_"
+            for field_name in properties:
+                if field_name.startswith(prefix):
+                    mdata = singer.metadata.write(
+                        mdata,
+                        ("properties", field_name),
+                        "inclusion",
+                        "unsupported",
+                    )
+        mdata = singer.metadata.write(
+            mdata,
+            (),
+            f"{MDATA_NS}.flatten-nav-properties",
+            stream_def.get("flatten_nav_properties", []),
+        )
+        field_metadata[stream_name] = singer.metadata.to_list(mdata)
 
     catalog = Catalog([])
 

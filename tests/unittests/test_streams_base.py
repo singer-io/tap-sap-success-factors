@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock
 
+from singer import metadata as singer_metadata
+
 from tap_sap_success_factors.streams.dynamic import DynamicStream
 
 
@@ -114,6 +116,231 @@ class TestBaseStreamBuildParams(unittest.TestCase):
         params = stream.build_params(state={})
         self.assertIn("$filter", params)
         self.assertIn("lastModifiedDateTime", params["$filter"])
+
+    def test_expand_added_for_flatten_nav_properties(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$expand"], "emailTypeNav")
+
+    def test_expand_omitted_when_flattened_fields_are_deselected(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+        stream.metadata = singer_metadata.write(
+            stream.metadata,
+            ("properties", "emailTypeNav_externalCode"),
+            "selected",
+            False,
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+    def test_expand_kept_when_any_flattened_field_is_selected(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"].update({
+            "emailTypeNav_externalCode": {"type": ["null", "string"]},
+            "emailTypeNav_status": {"type": ["null", "string"]},
+        })
+        stream.metadata = singer_metadata.write(
+            stream.metadata,
+            ("properties", "emailTypeNav_externalCode"),
+            "selected",
+            False,
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$expand"], "emailTypeNav")
+
+    def test_expand_omitted_for_unselected_dependency_stream(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+        stream.metadata = singer_metadata.write(
+            stream.metadata, (), "selected", False
+        )
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+    def test_expand_not_added_when_already_expand_nav_stream(self):
+        """A stream fetched via the separate expand_nav_property path (Group
+        5) must not also get a flatten-$expand — it queries a different
+        parent entity set entirely."""
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.expand_nav_property = "permissionsNav"
+        stream.flatten_nav_properties = ["emailTypeNav"]
+        stream.schema["properties"]["emailTypeNav_externalCode"] = {
+            "type": ["null", "string"]
+        }
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("$expand", params)
+
+
+class TestFlattenNavData(unittest.TestCase):
+
+    def test_flattens_expanded_nav_into_prefixed_fields(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+
+        record = {
+            "emailType": "home",
+            "emailTypeNav": {
+                "externalCode": "HOME",
+                "id": 7,
+                "childPicklistOptions": {
+                    "__deferred": {
+                        "uri": "https://sf/odata/v2/PicklistOption(7)/childPicklistOptions"
+                    }
+                },
+            },
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertNotIn("emailTypeNav", result)
+        self.assertEqual(result["emailTypeNav_externalCode"], "HOME")
+        self.assertEqual(result["emailTypeNav_id"], 7)
+        self.assertEqual(
+            result["emailTypeNav_childPicklistOptions_deferred_uri"],
+            "https://sf/odata/v2/PicklistOption(7)/childPicklistOptions",
+        )
+
+    def test_unexpanded_deferred_nav_becomes_deferred_uri(self):
+        """If $expand silently fails to apply (e.g. SAP ignores an unknown
+        nav), the __deferred link collapses to <nav>_deferred_uri rather
+        than crashing or emitting half-flattened fields."""
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+
+        record = {
+            "emailType": "home",
+            "emailTypeNav": {"__deferred": {"uri": "https://sf/.../emailTypeNav"}},
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertNotIn("emailTypeNav", result)
+        self.assertEqual(
+            result["emailTypeNav_deferred_uri"], "https://sf/.../emailTypeNav"
+        )
+
+    def test_root_metadata_envelope_is_flattened(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        record = {
+            "__metadata": {"uri": "https://sf/PerPerson('1')", "type": "SFOData.PerPerson"},
+            "personIdExternal": "1",
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertNotIn("__metadata", result)
+        self.assertEqual(result["metadata_uri"], "https://sf/PerPerson('1')")
+        self.assertEqual(result["metadata_type"], "SFOData.PerPerson")
+
+    def test_nested_nav_metadata_envelope_is_flattened(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.flatten_nav_properties = ["emailTypeNav"]
+
+        record = {
+            "__metadata": {"uri": "https://sf/PerEmail", "type": "SFOData.PerEmail"},
+            "emailTypeNav": {
+                "__metadata": {"uri": "https://sf/PicklistOption(7)", "type": "SFOData.PicklistOption"},
+                "id": 7,
+            },
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertEqual(result["metadata_type"], "SFOData.PerEmail")
+        self.assertEqual(result["emailTypeNav_metadata_type"], "SFOData.PicklistOption")
+        self.assertEqual(result["emailTypeNav_metadata_uri"], "https://sf/PicklistOption(7)")
+        self.assertEqual(result["emailTypeNav_id"], 7)
+        self.assertNotIn("emailTypeNav___metadata", result)
+        self.assertNotIn("emailTypeNav", result)
+
+    def test_metadata_envelope_does_not_override_existing_fields(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        record = {
+            "__metadata": {"uri": "u", "type": "t"},
+            "metadata_type": "real",
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertEqual(result["metadata_type"], "real")
+        self.assertEqual(result["metadata_uri"], "u")
+
+    def test_non_dict_metadata_is_dropped(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        result = stream.flatten_nav_data({"__metadata": None, "personIdExternal": "1"})
+
+        self.assertEqual(result, {"personIdExternal": "1"})
+
+    def test_unexpanded_root_navs_become_deferred_uri(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        record = {
+            "personIdExternal": "1",
+            "emailNav": {"__deferred": {"uri": "https://sf/PerPerson('1')/emailNav"}},
+            "phoneNav": {"__deferred": {"uri": "https://sf/PerPerson('1')/phoneNav"}},
+        }
+
+        result = stream.flatten_nav_data(record)
+
+        self.assertNotIn("emailNav", result)
+        self.assertNotIn("phoneNav", result)
+        self.assertEqual(
+            result["emailNav_deferred_uri"], "https://sf/PerPerson('1')/emailNav"
+        )
+        self.assertEqual(
+            result["phoneNav_deferred_uri"], "https://sf/PerPerson('1')/phoneNav"
+        )
+
+    def test_noop_when_no_flatten_nav_properties_configured(self):
+        client = Mock(config={"start_date": "2024-01-01T00:00:00Z"})
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        record = {"personIdExternal": "1"}
+        result = stream.flatten_nav_data(record)
+
+        self.assertEqual(result, {"personIdExternal": "1"})
 
 
 class TestParseOdataRecords(unittest.TestCase):
