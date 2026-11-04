@@ -19,6 +19,9 @@ class DynamicStream(BaseStream):
             f"{MDATA_NS}.sortable-key-properties", []
         )
         self.replication_keys = root_metadata.get("valid-replication-keys", [])
+        self.synthetic_replication_key = bool(
+            root_metadata.get(f"{MDATA_NS}.synthetic-replication-key")
+        )
         self.replication_method = (
             root_metadata.get("forced-replication-method")
             or root_metadata.get("replication-method")

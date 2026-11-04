@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.0
+- Update parent-child relationship with key-composition based workflow and updated child streams from Full Table to Incremental replication when the parent uses Incremental replication.[#12](https://github.com/singer-io/tap-sap-success-factors/pull/12)
+
 ## 0.2.0
 - Flatten to-one navigation properties into stream schemas and expand only selected lookups. Discovery now validates expansions, retains readable streams when optional lookups are unsupported, and marks those fields unsupported.[#8](https://github.com/singer-io/tap-sap-success-factors/pull/8)
 
