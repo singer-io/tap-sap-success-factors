@@ -734,4 +734,6 @@ class SAPSFAllFieldsTest(AllFieldsTest, SAPSuccessFactorsBaseTest):
 
     def streams_to_test(self):
         """Return the 11 streams known to return data in the reference environment."""
-        return self.expected_stream_names().difference(self.streams_to_exclude())
+        return self.expected_stream_names().difference(self.streams_to_exclude()) - {
+                "pick_list_v2"  # Exclude pick_list_v2 stream due to large fields without data
+            }

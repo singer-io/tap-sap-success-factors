@@ -2972,7 +2972,6 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             "challenge",
             "mentoring_program_participant_info",
             "custom_nav",
-            "pick_list_v2",
             "digital_support_system_information",
             "employee_profile_field_config",
             "background__awards",
@@ -3317,6 +3316,7 @@ class SAPSuccessFactorsBaseTest(BaseCase):
             "work_schedule_day_model_variant_assignment",
             "work_schedule_day_model_variant_identifier",
             "job_classification_usa_state_detail",
-            "form_audit_trail"
+            "form_audit_trail",
+            "user"  # As the creds cannot access the data with inacitve filters
 
         }
