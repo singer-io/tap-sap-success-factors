@@ -16,6 +16,11 @@ ODATA_DATE_RE = re.compile(r"^/Date\((?P<millis>-?\d+)(?P<offset>[+-]\d{4})?\)/$
 _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
+# SAP's User entity returns only active users unless ``status`` is filtered
+# explicitly, so list every known active/inactive value to include terminated users.
+USER_STATUS_FILTER = "status in 't','f','T','F','e','d'"
+
+
 def _odata_filter_value(value, field_schema: dict) -> str:
     """Return a type-appropriate OData ``eq`` filter RHS for *value*.
 
@@ -145,6 +150,13 @@ class BaseStream(ABC):
             bookmark_value = strftime(effective_dt)
 
             params["$filter"] = f"{key} ge datetime'{bookmark_value}'"
+
+        if self.entity == "User":
+            params["$filter"] = (
+                f"{params['$filter']} and {USER_STATUS_FILTER}"
+                if "$filter" in params
+                else USER_STATUS_FILTER
+            )
 
         if parent_obj and self.parent_filter_field:
             parent_val = parent_obj[self.parent_key_field]
