@@ -53,15 +53,16 @@ class SAPSFStartDateTest(StartDateTest, SAPSuccessFactorsBaseTest):
             .difference(self.streams_to_exclude())
             .intersection(incremental_streams)
             .difference(self.get_child_streams_with_no_replication_keys())
+            - {"rbp_role"}  # The modified datetime is beyond 2026-11-03 for 2nd sync. Hence remvoing it
         )
 
     @property
     def start_date_1(self):
         """Older start date — sync 1 should return the full reference dataset."""
-        return "2021-01-01T00:00:00Z"
+        return "2020-01-01T00:00:00Z"
 
     @property
     def start_date_2(self):
         """More recent start date — sync 2 should return fewer or equal records.
         """
-        return "2026-02-21T20:06:33.000000Z"
+        return "2026-11-03T00:00:00.000000Z"

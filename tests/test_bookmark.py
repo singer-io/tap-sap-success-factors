@@ -38,7 +38,7 @@ class SAPSFBookmarkTest(BookmarkTest, SAPSuccessFactorsBaseTest):
     initial_bookmarks = {
         "bookmarks": {
             "rbp_role": {"lastModifiedDate":     "2021-01-01T00:00:00.000000Z"},
-            "user":     {"lastModifiedDateTime": "2021-01-01T00:00:00.000000Z"},
+            "pick_list_v2": {"lastModifiedDateTime": "2020-01-01T00:00:00.000000Z"},
         }
     }
 
@@ -80,6 +80,6 @@ class SAPSFBookmarkTest(BookmarkTest, SAPSuccessFactorsBaseTest):
         """
 
         return {
-            "rbp_role": {"lastModifiedDate":     "2026-02-21T21:06:33.000000Z"},
-            "user":     {"lastModifiedDateTime": "2026-02-21T00:00:00.000000Z"}
+            "rbp_role": {"lastModifiedDate": "2026-11-17T00:00:00.000000Z"},
+            "pick_list_v2": {"lastModifiedDateTime": "2026-11-03T00:00:00.000000Z"}
         }
