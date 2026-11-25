@@ -202,6 +202,40 @@ class TestBaseStreamBuildParams(unittest.TestCase):
 
         self.assertNotIn("$expand", params)
 
+    def test_user_stream_includes_status_filter_with_incremental_filter(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z", "lookback_window_days": 0}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.entity = "User"
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(
+            params["$filter"],
+            "lastModifiedDateTime ge datetime'2024-01-01T00:00:00.000000Z'"
+            " and status in 't','f','T','F','e','d'",
+        )
+
+    def test_user_stream_status_filter_without_replication_key(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+        stream.entity = "User"
+        stream.replication_method = "FULL_TABLE"
+
+        params = stream.build_params(state={})
+
+        self.assertEqual(params["$filter"], "status in 't','f','T','F','e','d'")
+
+    def test_non_user_stream_has_no_status_filter(self):
+        client = Mock()
+        client.config = {"start_date": "2024-01-01T00:00:00Z"}
+        stream = DynamicStream(client=client, catalog=FakeCatalog())
+
+        params = stream.build_params(state={})
+
+        self.assertNotIn("status", params["$filter"])
+
 
 class TestFlattenNavData(unittest.TestCase):
 

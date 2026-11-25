@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.1
+- Add filter for User entity to fetch in-active users also.[#13](https://github.com/singer-io/tap-sap-success-factors/pull/13)
+
 ## 1.0.0
 - Update parent-child relationship with key-composition based workflow and updated child streams from Full Table to Incremental replication when the parent uses Incremental replication.[#12](https://github.com/singer-io/tap-sap-success-factors/pull/12)
 
